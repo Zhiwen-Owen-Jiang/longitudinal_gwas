@@ -284,6 +284,33 @@ def eigen(grid_mean, grid_cov, grid_size, time_grid):
     return eg_values, eg_vectors
     
 
+class FPCAres:
+    def __init__(self, file_path):
+        with h5py.File(file_path, "r") as file:
+            self.eg_values = file["eg_values"][:]
+            self.eg_vectors = file["eg_vectors"][:]
+            self.resid_var = file["resid_var"][:]
+            self.time_grid = file["time_grid"][:]
+
+        self.n_bases = len(self.eg_values)
+            
+    def select_ldrs(self, n_ldrs):
+        if n_ldrs is not None:
+            if n_ldrs <= self.n_bases:
+                self.eg_values = self.eg_values[:n_ldrs]
+                self.eg_vectors = self.eg_vectors[:, :n_ldrs]
+                self.n_bases = n_ldrs
+            else:
+                raise ValueError("the number of bases is less than --n-ldrs")
+            
+    def interpolate(self, new_time):
+        new_time = new_time / np.max(new_time)
+        interp_eg_vectors = np.zeros_like(self.eg_vectors)
+        for j in range(self.n_bases):
+            interp_eg_vectors[:, j] = np.interp(new_time, self.time_grid, self.eg_vectors[:, j])
+        return interp_eg_vectors
+    
+
 def check_input(args):
     # required arguments
     if args.pheno is None:

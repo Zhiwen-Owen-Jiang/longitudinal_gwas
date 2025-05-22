@@ -567,27 +567,27 @@ def read_exclude(exclude_files, locus=False):
     return exclude_snps_
 
 
-def read_voxel(voxel_file):
+def read_time(time_file):
     """
-    Reading a list of one-based voxels
+    Reading a list of time points 
 
     Parameters:
     ------------
-    voxel_file: a file of voxels without headers
+    time_file: a file of time points without headers
 
     Returns:
     ---------
-    voxel_list: a np.array of zero-based voxels (N, )
+    time_file: a np.array of time points
 
     """
-    voxels = pd.read_csv(voxel_file, header=None, sep="\s+", usecols=[0])
+    time = pd.read_csv(time_file, header=None, sep="\s+", usecols=[0])
     try:
-        int(voxels.iloc[0, 0])
+        float(time.iloc[0, 0])
     except ValueError:
-        raise ValueError("headers are not allowed in --voxel")
-    voxel_list = (voxels[0] - 1).values
+        raise ValueError("headers are not allowed in --time")
+    time_list = time[0].values
 
-    return voxel_list
+    return time_list
 
 
 def parse_input(arg):

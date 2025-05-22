@@ -96,66 +96,51 @@ def check_input(args):
 def run(args, log):
     check_input(args)
 
-    try:
-        # read fpca results
-        fpca_res = FPCAres(args.fpca_res)
+    # read fpca results
+    fpca_res = FPCAres(args.fpca_res)
+    log.info(f"{fpca_res.n_bases} bases read from {args.fpca_res}")
+    fpca_res.select_ldrs(args.n_ldrs)
+    
+    # read phenotype
+    log.info(f"Read a longitudinal phenotype from {args.pheno}")
+    pheno = ds.LongiPheno(args.pheno)
+    log.info(f"{pheno.n_sub} unique subjects and {pheno.n_obs} observations.")
 
-        bases = np.load(args.bases)
-        n_time, n_bases = bases.shape
-        log.info(f"{n_bases} bases of {n_time} time points read from {args.bases}")
+    # read covariates
+    log.info(f"Read covariates from {args.covar}")
+    covar = ds.Covar(args.covar, args.cat_covar_list)
 
-        if args.n_ldrs is not None:
-            if args.n_ldrs <= n_bases:
-                n_ldrs = args.n_ldrs
-                bases = bases[:, :n_ldrs]
-            else:
-                raise ValueError("the number of bases is less than --n-ldrs")
-        else:
-            n_ldrs = n_bases
+    # keep common subjects
+    common_idxs = ds.get_common_idxs(pheno.data.index, covar.data.index, args.keep)
+    common_idxs = ds.remove_idxs(common_idxs, args.remove)
+    log.info(f"{len(common_idxs)} subjects common in these files.")
+    pheno.keep_and_remove(common_idxs)
+    pheno.generate_time_features()
+    covar.keep_and_remove(common_idxs)
+    covar.cat_covar_intercept()
+    log.info(
+        f"{covar.data.shape[1]} fixed effects in the covariates (including the intercept)."
+    )
 
-        # read phenotype
-        log.info(f"Read a longitudinal phenotype from {args.pheno}")
-        pheno = ds.LongiPheno(args.pheno)
-        log.info(f"{pheno.n_sub} unique subjects and {pheno.n_obs} observations.")
+    # contruct ldrs
+    ldrs = pace(pheno, fpca_res)
+    log.info(f"Constructed {fpca_res.n_bases} LDRs.")
 
-        # read covariates
-        log.info(f"Read covariates from {args.covar}")
-        covar = ds.Covar(args.covar, args.cat_covar_list)
+    # var-cov matrix of projected LDRs
+    ldr_cov = projection_ldr(ldrs, np.array(covar.data))
+    log.info(
+        f"Removed covariate effects from LDRs and computed variance-covariance matrix.\n"
+    )
 
-        # keep common subjects
-        common_idxs = ds.get_common_idxs(pheno.data.index, covar.data.index, args.keep)
-        common_idxs = ds.remove_idxs(common_idxs, args.remove)
-        log.info(f"{len(common_idxs)} subjects common in these files.")
-        pheno.keep_and_remove(common_idxs)
-        pheno.generate_time_features()
-        covar.keep_and_remove(common_idxs)
-        covar.cat_covar_intercept()
-        log.info(
-            f"{covar.data.shape[1]} fixed effects in the covariates (including the intercept)."
+    # save the output
+    ldr_df = pd.DataFrame(ldrs, index=pheno.get_ids())
+    ldr_df.to_csv(f"{args.out}_ldr_top{fpca_res.n_bases}.txt", sep="\t")
+    np.save(f"{args.out}_ldr_cov_top{fpca_res.n_bases}.npy", ldr_cov)
+
+    log.info(f"Saved LDRs to {args.out}_ldr_top{fpca_res.n_bases}.txt")
+    log.info(
+        (
+            f"Saved the variance-covariance matrix of covariate-effect-removed LDRs "
+            f"to {args.out}_ldr_cov_top{fpca_res.n_bases}.npy"
         )
-
-        # contruct ldrs
-        ldrs = pace(pheno, fpca_res)
-
-        # var-cov matrix of projected LDRs
-        ldr_cov = projection_ldr(ldrs, np.array(covar.data))
-        log.info(
-            f"Removed covariate effects from LDRs and computed variance-covariance matrix.\n"
-        )
-
-        # save the output
-        ldr_df = pd.DataFrame(ldrs, index=pheno.get_ids())
-        ldr_df.to_csv(f"{args.out}_ldr_top{n_ldrs}.txt", sep="\t")
-        np.save(f"{args.out}_ldr_cov_top{n_ldrs}.npy", ldr_cov)
-
-        log.info(f"Saved LDRs to {args.out}_ldr_top{n_ldrs}.txt")
-        log.info(
-            (
-                f"Saved the variance-covariance matrix of covariate-effect-removed LDRs "
-                f"to {args.out}_ldr_cov_top{n_ldrs}.npy"
-            )
-        )
-
-    finally:
-        if "fpca_res" in locals():
-            fpca_res.close()
+    )

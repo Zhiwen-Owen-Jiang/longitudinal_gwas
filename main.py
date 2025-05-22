@@ -8,7 +8,7 @@ from script.utils import GetLogger, sec_to_str
 
 
 parser = argparse.ArgumentParser(
-    description=f"\n longtitudinal heritability \n"
+    description=f"\n longitudinal GWAS \n"
 )
 common_parser = parser.add_argument_group(
     title="Common arguments"
@@ -16,11 +16,8 @@ common_parser = parser.add_argument_group(
 fpca_parser = parser.add_argument_group(
     title="Arguments specific to functional PCA"
 )
-spatial_ldr_parser = parser.add_argument_group(
-    title="Arguments specific to constructing spatial LDRs"
-)
-pace_parser = parser.add_argument_group(
-    title="Arguments specific to estimating functional PCs using PACE"
+make_ldr_parser = parser.add_argument_group(
+    title="Arguments specific to constructing LDRs"
 )
 relatedness_parser = parser.add_argument_group(
     title="Arguments specific to removing genetic relatedness in LDRs"
@@ -31,8 +28,8 @@ gwas_parser = parser.add_argument_group(
 sumstats_parser = parser.add_argument_group(
     title="Arguments specific to organizing and preprocessing GWAS summary statistics"
 )
-voxelgwas_parser = parser.add_argument_group(
-    title="Arguments specific to recovering voxel-level GWAS results"
+temporal_gwas_parser = parser.add_argument_group(
+    title="Arguments specific to recovering temporal GWAS results"
 )
 herigc_parser = parser.add_argument_group(
     title="Arguments specific to heritability and (cross-trait) genetic correlation analysis"
@@ -46,11 +43,8 @@ make_mt_parser = parser.add_argument_group(
 fpca_parser.add_argument(
     "--fpca", action="store_true", help="Functional PCA."
 )
-spatial_ldr_parser.add_argument(
-    "--make-spatial-ldrs", action="store_true", help="Constructing spatial LDRs."
-)
-pace_parser.add_argument(
-    "--pace", action="store_true", help="Estimating functional PCs using PACE."
+make_ldr_parser.add_argument(
+    "--make-ldrs", action="store_true", help="Constructing LDRs."
 )
 relatedness_parser.add_argument(
     "--relatedness", action="store_true", help="Removing genetic relatedness in LDRs."
@@ -68,8 +62,8 @@ herigc_parser.add_argument(
     action="store_true",
     help="Heritability and (cross-trait) genetic correlation analysis.",
 )
-voxelgwas_parser.add_argument(
-    "--voxel-gwas", action="store_true", help="Recovering voxel-level GWAS results."
+temporal_gwas_parser.add_argument(
+    "--voxel-gwas", action="store_true", help="Recovering temporal GWAS results."
 )
 make_mt_parser.add_argument(
     "--make-mt", action="store_true", help="Making a hail.MatrixTable of genotype data."
@@ -79,10 +73,8 @@ make_mt_parser.add_argument(
 # common arguments
 common_parser.add_argument("--out", help="Prefix of output.")
 common_parser.add_argument(
-    "--image",
-    help=(
-        "Directory to processed raw images in HDF5 format."
-    ),
+    "--pheno", 
+    help="Directory to longitudinal phenotype."
 )
 common_parser.add_argument(
     "--n-ldrs",
@@ -117,13 +109,8 @@ common_parser.add_argument(
 common_parser.add_argument(
     "--time",
     help=(
-        "Time points to keep. Can be a list of time points separated by comma."
-    ),
-)
-common_parser.add_argument(
-    "--voxels", "--voxel",
-    help=(
-        "One-based index of voxel or a file containing voxels."
+        "Time points to keep. Can be a list of time points separated by comma, "
+        "or a file of time points."
     ),
 )
 common_parser.add_argument(
@@ -155,21 +142,9 @@ common_parser.add_argument(
     ),
 )
 common_parser.add_argument(
-    "--bases",
+    "--fpca-res",
     help=(
-        "Directory to functional bases."
-    ),
-)
-common_parser.add_argument(
-    "--spatial-ldrs",
-    help=(
-        "Directory to spatial LDRs."
-    ),
-)
-common_parser.add_argument(
-    "--recon-ldrs",
-    help=(
-        "Directory to reconstructed LDRs."
+        "Directory to functional PCA results."
     ),
 )
 common_parser.add_argument(
@@ -313,20 +288,18 @@ fpca_parser.add_argument(
     ),
 )
 fpca_parser.add_argument(
-    "--bw-opt",
+    "--mean-bw",
     type=float,
     help=(
-        "The bandwidth you want to use in kernel smoothing. "
-        "HEIG will skip searching the optimal bandwidth. "
-        "For images of any dimension, just specify one number, e.g, 0.5 "
-        "for 3D images."
+        "The bandwidth of mean function used in kernel smoothing."
     ),
 )
 fpca_parser.add_argument(
-    "--skip-smoothing",
-    action='store_true',
+    "--cov-bw",
+    type=float,
     help=(
-        "Skipping kernel smoothing. "
+        "The bandwidth of covariance and residual variance function "
+        "used in kernel smoothing."
     ),
 )
 
@@ -460,34 +433,18 @@ def check_accepted_args(module, args, log):
         "fpca": {
             "out",
             "fpca",
-            "image",
-            "time",
-            "voxels",
-            "all_pc",
+            "pheno",
             "n_ldrs",
             "keep",
             "remove",
-            "bw_opt",
-            "skip_smoothing",
+            "mean_bw",
+            "cov_bw",
         },
-        "make_spatial_ldr": {
+        "make_ldr": {
             "out",
-            "make_spatial_ldr",
-            "image",
-            "time",
-            "voxels",
-            "bases",
-            "n_ldrs",
-            "covar",
-            "cat_covar_list",
-            "keep",
-            "remove",
-            "threads",
-        },
-        "pace": {
-            "out",
-            "pace",
-            "spatial_ldrs",
+            "make_ldr",
+            "pheno",
+            "fpca_res",
             "n_ldrs",
             "covar",
             "cat_covar_list",
@@ -501,7 +458,7 @@ def check_accepted_args(module, args, log):
             "remove",
             "extract",
             "exclude",
-            "recon_ldrs",
+            "ldrs",
             "covar",
             "cat_covar_list",
             "partition",
@@ -535,7 +492,7 @@ def check_accepted_args(module, args, log):
             "call_rate",
             "chr_interval",
             "ldr_col",
-            "recon_ldrs",
+            "ldrs",
             "n_ldrs",
             "grch37",
             "geno_mt",
@@ -544,18 +501,18 @@ def check_accepted_args(module, args, log):
             "loco_preds",
             "spark_conf",
         },
-        "voxel_gwas": {
+        "temporal_gwas": {
             "out",
-            "voxel_gwas",
+            "temporal_gwas",
             "sig_thresh",
-            "voxels",
+            "time",
+            "fpca_res",
             "chr_interval",
             "extract",
             "exclude",
             "ldr_sumstats",
             "n_ldrs",
             "ldr_cov",
-            "bases",
             "threads",
         },
         "sumstats": {
@@ -591,7 +548,8 @@ def check_accepted_args(module, args, log):
             "heri_only",
             "n_ldrs",
             "ldr_sumstats",
-            "bases",
+            "fpca_res",
+            "time",
             "ldr_cov",
             "extract",
             "exclude",
@@ -653,13 +611,12 @@ def process_args(args, log):
     Checking file existence and processing arguments
 
     """
-    ds.check_existence(args.image)
     ds.check_existence(args.ldr_sumstats, ".snpinfo")
     ds.check_existence(args.ldr_sumstats, ".sumstats")
-    ds.check_existence(args.bases)
+    ds.check_existence(args.fpca_res)
     ds.check_existence(args.ldr_cov)
     ds.check_existence(args.covar)
-    ds.check_existence(args.spatial_ldrs)
+    ds.check_existence(args.ldrs)
     ds.check_existence(args.spark_conf)
     ds.check_existence(args.loco_preds)
     ds.check_existence(args.geno_mt)
@@ -694,23 +651,17 @@ def process_args(args, log):
         args.exclude = ds.read_exclude(args.exclude)
         log.info(f"{len(args.exclude)} SNP(s) in --exclude (logical 'or' for multiple files).")
 
-    if args.voxels is not None:
-        try:
-            args.voxels = np.array(
-                [int(voxel) - 1 for voxel in ds.parse_input(args.voxels)]
-            )
-        except ValueError:
-            ds.check_existence(args.voxels)
-            args.voxels = ds.read_voxel(args.voxels)
-        if np.min(args.voxels) <= -1:
-            raise ValueError("voxel index must be one-based")
-        log.info(f"{len(args.voxels)} voxel(s) in --voxels.")
-        
     if args.time is not None:
         try:
-            args.time = np.array([float(time) for time in args.time.split(",")])
+            args.time = np.array(
+                [float(time) for time in ds.parse_input(args.time)]
+            )
+            args.time = np.sort(args.time)
         except ValueError:
-            raise ValueError("--time must be a list of time points separated by comma")
+            ds.check_existence(args.time)
+            args.time = ds.read_time(args.time)
+        if np.min(args.time) < 0:
+            raise ValueError("time index must be greater than 0")
         log.info(f"{len(args.time)} time point(s) in --time.")
 
     if args.maf_min is not None:
@@ -749,12 +700,11 @@ def main(args, log):
         raise ValueError(f"{os.path.dirname(args.out)} does not exist")
     if (
         args.fpca
-        + args.make_spatial_ldrs
-        + args.pace
+        + args.make_ldrs
         + args.relatedness
         + args.gwas
         + args.sumstats
-        + args.voxel_gwas
+        + args.temporal_gwas
         + args.heri_gc
         + args.make_mt
         != 1
@@ -762,20 +712,20 @@ def main(args, log):
         raise ValueError(
             (
                 "must raise one and only one of following module flags: "
-                "--fpca, --make-spatial-ldrs, --pace, --relatedness, --gwas, "
-                "--sumstats, --voxel-gwas, --heri-gc, --make-mt"
+                "--fpca, --make-ldrs, --relatedness, --gwas, "
+                "--sumstats, --temporal-gwas, --heri-gc, --make-mt"
             )
         )
 
     if args.fpca:
         check_accepted_args("fpca", args, log)
         import script.fpca as module
-    if args.make_spatial_ldrs:
-        check_accepted_args("make_spatial_ldrs", args, log)
-        import script.spatial_ldr as module
+    if args.make_ldrs:
+        check_accepted_args("make_ldrs", args, log)
+        import script.ldrs as module
     if args.pace:
         check_accepted_args("pace", args, log)
-        import script.pace as module
+        import script.fpca as module
     if args.relatedness:
         check_accepted_args("relatedness", args, log)
         import script.relatedness as module
@@ -785,9 +735,9 @@ def main(args, log):
     if args.sumstats:
         check_accepted_args("sumstats", args, log)
         import script.sumstats as module
-    if args.voxel_gwas:
-        check_accepted_args("voxel_gwas", args, log)
-        import script.voxel_gwas as module
+    if args.temporal_gwas:
+        check_accepted_args("temporal_gwas", args, log)
+        import script.temporal_gwas as module
     if args.heri_gc:
         check_accepted_args("heri_gc", args, log)
         import script.herigc as module
