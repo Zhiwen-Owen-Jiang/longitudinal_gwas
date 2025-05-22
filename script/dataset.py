@@ -9,7 +9,7 @@ from script import utils
 
 
 class Dataset:
-    def __init__(self, dir, all_num_cols=False):
+    def __init__(self, dir, all_num_cols=False, allow_dup=False):
         """
         Read a dataset and do preprocessing
 
@@ -17,6 +17,7 @@ class Dataset:
         ------------
         dir: diretory to the dataset
         all_num_cols: if all columns are numbers (except for FID and IID)
+        allow_dup: if allow duplicates
 
         """
         self.logger = logging.getLogger(__name__)
@@ -37,21 +38,19 @@ class Dataset:
             na_values=[-9, "NONE", "."],
             dtype=dtype_dict,
         )
+        self._update_n_sub()
 
-        n_sub = len(self.data)
-        # self.data.drop_duplicates(subset=["FID", "IID"], inplace=True, keep=False)
-        # self.logger.info(f"Removed {n_sub - len(self.data)} duplicated subjects.")
+        if not allow_dup:
+            self.data.drop_duplicates(subset=["FID", "IID"], inplace=True, keep=False)
+            self.logger.info(f"Removed {self.n_sub - len(self.data)} duplicated subjects.")
         self._remove_na_inf()
 
         self.data = self.data.set_index(["FID", "IID"])
         self.data = self.data.sort_index()
 
-        if all_num_cols:
-            n_sub = len(self.data)
-            self.data = self.data[np.std(self.data, axis=1) != 0]
-            self.logger.info(
-                f"Removed {n_sub - len(self.data)} subjects with zero variance."
-            )
+    def _update_n_sub(self):
+        self.n_sub = len(self.data.unique(["FID", "IID"]))
+        self.n_obs = self.data.shape[0]
 
     def _check_header(self, openfunc, compression, dir):
         """
@@ -89,6 +88,7 @@ class Dataset:
         self.logger.info(
             f"Removed {sum(bad_idxs)} row(s) with missing or infinite values."
         )
+        self._update_n_sub()
 
     def keep_and_remove(self, keep_idx=None, remove_idx=None, merge=False):
         """
@@ -112,6 +112,7 @@ class Dataset:
             self.data = self.data[~self.data.index.isin(remove_idx)]
         if len(self.data) == 0:
             raise ValueError("no data left")
+        self._update_n_sub()
 
     def to_single_index(self):
         """
@@ -123,6 +124,33 @@ class Dataset:
 
     def get_ids(self):
         return self.data.index
+
+
+class LongiPheno(Dataset):
+    def __init__(self, dir):
+        """
+        TODO: check time distribution
+        
+        """
+        super().__init__(dir, all_num_cols=True, allow_dup=True)
+        self.data.columns = ["FID", "IID", "time", "pheno"]
+        
+        if (self.data["time"] < 0).any():
+            raise ValueError('negative time is not allowed')
+        self.n_sub = len(self.data.unique(["FID", "IID"]))
+        self.n_obs = self.data.shape[0]
+        
+    def generate_time_features(self):
+        self.pheno = np.array(self.data["time"])
+        self.time = np.array(self.data["time"] / self.data["time"].max())
+        self.unique_time = np.unique(self.data["time"])
+        self.unique_time_idx = {x: i for i, x in enumerate(self.unique_time)}
+        self.time_idx = np.array([self.unique_time_idx[x] for x in self.data["time"]])
+        self.sub_n_obs = self.data.index.value_counts(sort=False).values
+        self.to_single_index()
+        self.sub_time = self.data.groupby("IID")["time"].apply(list).to_dict()
+        self.grid_size = (self.unique_time[-1] - self.unique_time[0]) / 50
+        self.time_grid = np.arange(self.unique_time[0], self.unique_time[-1] + self.grid_size, self.grid_size)
 
 
 class Covar(Dataset):
