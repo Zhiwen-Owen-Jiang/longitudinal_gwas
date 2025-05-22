@@ -1,10 +1,7 @@
 import h5py
-import logging
 import numpy as np
-import pandas as pd
 from abc import ABC, abstractmethod
 from scipy.linalg import cho_solve, cho_factor
-from script.utils import inv
 import script.dataset as ds
 
 """
@@ -15,6 +12,10 @@ TODO:
 
 
 def traz(f, g):
+    """
+    Numeric integration using trapezoid rule
+    
+    """
     if len(f) != len(g):
         raise ValueError('f and g have different lengths')
     if not all(f[i] < f[i+1] for i in range(len(f)-1)):
@@ -246,31 +247,24 @@ class ResidualVariance(LocalLinear):
         return resid_var
     
 
-def pace(pheno, grid_mean, grid_cov, resid_var):
+def eigen(grid_mean, grid_cov, grid_size, time_grid):
     """
-    PACE estimator
+    Eigen decomposition
 
     Parameters:
     ------------
     pheno: 
-    grid_mean (n_ldrs, 51): a np.array of mean estimate
-    grid_cov (n_ldrs, 51, 51): a np.array of cov estimate
-    resid_var (n_ldrs, ): a np.array of resid var estimate
+    grid_mean (n_ldrs, n_grids): a np.array of mean estimate
+    grid_cov (n_ldrs, n_grids, n_grids): a np.array of cov estimate
+    grid_size:
+    time_grid:
 
     Returns:
     ---------
-    recon_spatial_ldrs (n_time, n_sub, n_ldrs): reconstructed spatial LDRs at each time point  
+    eg_values:
+    eg_vectors: 
     
     """
-    sub_time = pheno.sub_time
-    unique_time = pheno.unique_time
-    unique_time_idx = pheno.unique_time_idx
-    n_time = len(unique_time)
-    grid_size = pheno.grid_size
-    time_grid = pheno.time_grid
-    n_sub = pheno.n_sub
-    pheno = pheno.pheno
-
     eg_values, eg_vectors = np.linalg.eigh(grid_cov)
     eg_values = np.flip(eg_values) # (n_time, )
     eg_vectors = np.flip(eg_vectors, axis=1) # (n_time, n_time)
@@ -278,63 +272,17 @@ def pace(pheno, grid_mean, grid_cov, resid_var):
     eg_values = eg_values[eg_values > 0]
     
     fve = np.cumsum(eg_values) / np.sum(eg_values)
-    n_opt = np.min([n_time, np.argmax(fve > 0.98) + 1])
+    n_opt = np.argmax(fve > 0.99) + 1
     eg_values = eg_values[:n_opt] * grid_size
     eg_vectors = eg_vectors[:, :n_opt]
-    interp_eg_vectors = np.zeros((n_time, n_opt), dtype=np.float32)
-    time_ldrs = np.zeros((n_sub, n_opt), dtype=np.float32)
-    # TODO: separate time_ldrs in another step? because we have related subjects.
 
     for j in range(n_opt):
         eg_vectors[:, j] = eg_vectors[:, j] / np.sqrt(traz(time_grid, eg_vectors[:, j] ** 2))
         if np.sum(eg_vectors[:, j] * grid_mean) < 0:
             eg_vectors[:, j] = -eg_vectors[:, j]
-        interp_eg_vectors[:, j] = np.interp(unique_time, time_grid, eg_vectors[:, j])
-
-    fitted_cov = np.dot(interp_eg_vectors * eg_values, interp_eg_vectors.T)
-    fitted_cov += np.diag([resid_var] * n_time)
-    interp_eg_vectors = interp_eg_vectors * eg_values
-    start, end = 0, 0
-    for sub_idx, (_, time) in enumerate(sub_time.items()):
-        end += len(time)
-        time_idx = np.array([unique_time_idx[t] for t in time])
-        y_i = pheno[start: end] # (n_time_i, )
-        Sigma_i_inv = inv(fitted_cov[time_idx][:, time_idx]) # (n_time_i, n_time_i)
-        eg_vector = interp_eg_vectors[time_idx] # (n_time_i, n_opt)
-        time_ldrs[sub_idx] = np.dot(np.dot(eg_vector.T, Sigma_i_inv), y_i)
-        start = end
-
-    return time_ldrs
+        
+    return eg_values, eg_vectors
     
-
-def ldr_cov(time_ldrs, covar):
-    """
-    Computing S'(I - M)S/n = S'S - S'X(X'X)^{-1}X'S/n,
-    where I is the identity matrix,
-    M = X(X'X)^{-1}X' is the project matrix for X,
-    S is the LDR matrix.
-
-    Parameters:
-    ------------
-    recon_spatial_ldrs (n_sub, n_ldrs): reconstructed spatial LDRs at each time point
-    covar (n_sub, n_covar): covariates, including the intercept
-
-    Returns:
-    ---------
-    ldr_cov_matrix (n_ldrs, n_ldrs): variance-covariance matrix of LDRs at each time point
-
-    """
-    n_sub = time_ldrs.shape[0]
-    inner_covar = np.dot(covar.T, covar)
-    inner_covar_inv = inv(inner_covar)
-
-    inner_ldr = np.dot(time_ldrs.T, time_ldrs)
-    ldr_covar = np.dot(time_ldrs.T, covar)
-    part2 = np.dot(np.dot(ldr_covar, inner_covar_inv), ldr_covar.T)
-    ldr_cov = (inner_ldr - part2) / n_sub
-
-    return ldr_cov
-
 
 def check_input(args):
     # required arguments
@@ -350,7 +298,7 @@ def run(args, log):
     # read phenotype
     log.info(f"Read a longitudinal phenotype from {args.pheno}")
     pheno = ds.LongiPheno(args.pheno)
-    log.info(f"{pheno.data.shape[1]-1} subjects and {pheno.data.shape[0]} observations.")
+    log.info(f"{pheno.n_sub} unique subjects and {pheno.n_obs} observations.")
 
     # read covariates
     log.info(f"Read covariates from {args.covar}")
@@ -358,19 +306,15 @@ def run(args, log):
 
     # keep common subjects
     common_idxs = ds.get_common_idxs(pheno.data.index, covar.data.index, args.keep)
-    if args.remove is not None:
-        ids_to_exclude = ids_to_exclude.union(args.remove)
-    common_idxs = ds.remove_idxs(common_idxs, ids_to_exclude)
+    common_idxs = ds.remove_idxs(common_idxs, args.remove)
     log.info(f"{len(common_idxs)} subjects common in these files.")
     pheno.keep_and_remove(common_idxs)
     covar.keep_and_remove(common_idxs)
     covar.cat_covar_intercept()
 
     # estimation
-    log.info("Reconstruct time by PACE ...")
+    log.info("Doing FPCA ...")
     pheno.generate_time_features()
-    ids = covar.get_ids()
-    pheno.to_single_index()
 
     mean_estimator = Mean(pheno)
     mean, grid_mean = mean_estimator.estimate(0.05)
@@ -383,21 +327,14 @@ def run(args, log):
         mean, cut_time_grid_diag, pheno.time_idx, 0.1
     )
 
-    # PACE
-    time_ldrs = pace(pheno, grid_mean, grid_cov, resid_var)
-
-    # cov matrix of LDRs for each time
-    ldr_cov_matrix = ldr_cov(time_ldrs, np.array(covar.data))
+    # eigen
+    eg_values, eg_vectors = eigen(grid_mean, grid_cov, pheno.grid_size, pheno.time_grid)
 
     # save
-    time_ldrs = pd.DataFrame(time_ldrs, index=ids)
-    time_ldrs.to_csv(f"{args.out}_time_ldrs.txt", sep='\t')
-    np.save(f"{args.out}_ldr_cov.npy", ldr_cov_matrix)
+    with h5py.File(f"{args.out}_fpca.h5", "w") as file:
+        file.create_dataset("eg_values", data=eg_values, dtype="float32")
+        file.create_dataset("eg_vectors", data=eg_vectors, dtype="float32")
+        file.create_dataset("resid_var", data=resid_var, dtype="float32")
+        file.create_dataset("time_grid", data=pheno.time_grid, dtype="float32")
 
-    log.info(f"\nSaved time LDRs to {args.out}_time_ldrs.txt")
-    log.info(
-        (
-            f"Saved the variance-covariance matrix of covariate-effect-removed LDRs "
-            f"to {args.out}_ldr_cov.npy"
-        )
-    )
+    log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")
