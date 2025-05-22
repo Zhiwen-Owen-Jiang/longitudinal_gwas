@@ -63,7 +63,7 @@ herigc_parser.add_argument(
     help="Heritability and (cross-trait) genetic correlation analysis.",
 )
 temporal_gwas_parser.add_argument(
-    "--voxel-gwas", action="store_true", help="Recovering temporal GWAS results."
+    "--temporal-gwas", action="store_true", help="Recovering temporal GWAS results."
 )
 make_mt_parser.add_argument(
     "--make-mt", action="store_true", help="Making a hail.MatrixTable of genotype data."
@@ -81,6 +81,12 @@ common_parser.add_argument(
     type=int,
     help=(
         "Number of LDRs."
+    ),
+)
+common_parser.add_argument(
+    "--ldrs",
+    help=(
+        "Directory to LDR file."
     ),
 )
 common_parser.add_argument(
@@ -283,7 +289,7 @@ fpca_parser.add_argument(
     "--all-pc",
     action="store_true",
     help=(
-        "Flag for generating all principal components which is min(n_subs, n_voxels), "
+        "Flag for generating all principal components which is min(n_subs, n_time), "
         "which may take longer time and very memory consuming."
     ),
 )
@@ -334,8 +340,8 @@ herigc_parser.add_argument(
     "--heri-only",
     action="store_true",
     help=(
-        "Flag for only computing voxelwise heritability "
-        "and skipping voxelwise genetic correlation within images."
+        "Flag for only computing heritability "
+        "and skipping genetic correlation within curves."
     ),
 )
 
@@ -723,9 +729,6 @@ def main(args, log):
     if args.make_ldrs:
         check_accepted_args("make_ldrs", args, log)
         import script.ldrs as module
-    if args.pace:
-        check_accepted_args("pace", args, log)
-        import script.fpca as module
     if args.relatedness:
         check_accepted_args("relatedness", args, log)
         import script.relatedness as module

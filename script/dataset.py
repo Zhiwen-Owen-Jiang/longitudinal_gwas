@@ -49,7 +49,10 @@ class Dataset:
         self.data = self.data.sort_index()
 
     def _update_n_sub(self):
-        self.n_sub = len(self.data.unique(["FID", "IID"]))
+        if "IID" in self.data.columns:
+            self.n_sub = len(self.data.value_counts(["FID", "IID"]))
+        else:
+            self.n_sub = len(self.data.index.unique())
         self.n_obs = self.data.shape[0]
 
     def _check_header(self, openfunc, compression, dir):
@@ -107,8 +110,10 @@ class Dataset:
                 common_idxs = get_common_idxs(self.data.index, keep_idx)
             else:
                 common_idxs = keep_idx
+            common_idxs = common_idxs.unique()
             self.data = self.data.loc[common_idxs]
         if remove_idx is not None:
+            remove_idx = remove_idx.unique()
             self.data = self.data[~self.data.index.isin(remove_idx)]
         if len(self.data) == 0:
             raise ValueError("no data left")
@@ -133,19 +138,19 @@ class LongiPheno(Dataset):
         
         """
         super().__init__(dir, all_num_cols=True, allow_dup=True)
-        self.data.columns = ["FID", "IID", "time", "pheno"]
+        self.data.columns = ["time", "pheno"]
         
         if (self.data["time"] < 0).any():
             raise ValueError('negative time is not allowed')
-        self.n_sub = len(self.data.unique(["FID", "IID"]))
-        self.n_obs = self.data.shape[0]
         
     def generate_time_features(self):
-        self.pheno = np.array(self.data["time"])
-        self.time = np.array(self.data["time"] / self.data["time"].max())
-        self.unique_time = np.unique(self.data["time"])
+        self.pheno = np.array(self.data["pheno"])
+        self.max_time = self.data["time"].max()
+        self.data["time"] = self.data["time"] / self.max_time
+        self.time = np.array(self.data["time"])
+        self.unique_time = np.unique(self.time)
         self.unique_time_idx = {x: i for i, x in enumerate(self.unique_time)}
-        self.time_idx = np.array([self.unique_time_idx[x] for x in self.data["time"]])
+        self.time_idx = np.array([self.unique_time_idx[x] for x in self.time])
         self.sub_n_obs = self.data.index.value_counts(sort=False).values
         self.to_single_index()
         self.sub_time = self.data.groupby("IID")["time"].apply(list).to_dict()

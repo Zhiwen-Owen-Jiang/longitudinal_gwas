@@ -144,7 +144,7 @@ class Covariance(LocalLinear):
             sub_pheno = sub_pheno - mean[time_idx[start1: end1]]
             sub_pheno = sub_pheno.reshape(-1, 1)
             outer_prod_sub_pheno = np.dot(sub_pheno, sub_pheno.T)
-            self.two_way_pheno[start2: end2, i] = outer_prod_sub_pheno[off_diag]
+            self.two_way_pheno[start2: end2] = outer_prod_sub_pheno[off_diag]
 
             start1 = end1
             start2 = end2
@@ -191,7 +191,7 @@ class Covariance(LocalLinear):
         for t1 in range(self.n_grids):
             for t2 in range(t1, self.n_grids):
                 x, weights = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
-                grid_cov_function[:, t1, t2] = self._wls(x, self.mean_pheno, weights)
+                grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
         
         iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
         grid_cov_function[(iu_cols, iu_rows)] = grid_cov_function[(iu_rows, iu_cols)]
@@ -226,7 +226,7 @@ class ResidualVariance(LocalLinear):
         return x, weights
     
     def estimate(self, mean, diag, time_idx, bw):
-        one_way_mean = mean[0, time_idx].reshape(-1, 1)
+        one_way_mean = mean[time_idx]
         grid_resid_var = np.zeros(self.n_grids, dtype=np.float32)
 
         for i, t in enumerate(self.time_grid):
@@ -241,8 +241,7 @@ class ResidualVariance(LocalLinear):
             (self.time_grid > np.quantile(self.time_grid, 0.25)) & 
             (self.time_grid < np.quantile(self.time_grid, 0.75))
         ]
-        resid_var = traz(cut_time_grid, (grid_resid_var - diag))
-        resid_var /= cut_time_grid[-1] - cut_time_grid[0]
+        resid_var = traz(cut_time_grid, (grid_resid_var - diag)) / 0.5 # TODO: check it
 
         return resid_var
     
@@ -272,7 +271,7 @@ def eigen(grid_mean, grid_cov, grid_size, time_grid):
     eg_values = eg_values[eg_values > 0]
     
     fve = np.cumsum(eg_values) / np.sum(eg_values)
-    n_opt = np.argmax(fve > 0.99) + 1
+    n_opt = np.argmax(fve > 0.98) + 1
     eg_values = eg_values[:n_opt] * grid_size
     eg_vectors = eg_vectors[:, :n_opt]
 
@@ -315,8 +314,6 @@ def check_input(args):
     # required arguments
     if args.pheno is None:
         raise ValueError("--pheno is required")
-    if args.covar is None:
-        raise ValueError("--covar is required")
 
 
 def run(args, log):
@@ -327,17 +324,11 @@ def run(args, log):
     pheno = ds.LongiPheno(args.pheno)
     log.info(f"{pheno.n_sub} unique subjects and {pheno.n_obs} observations.")
 
-    # read covariates
-    log.info(f"Read covariates from {args.covar}")
-    covar = ds.Covar(args.covar, args.cat_covar_list)
-
     # keep common subjects
-    common_idxs = ds.get_common_idxs(pheno.data.index, covar.data.index, args.keep)
+    common_idxs = ds.get_common_idxs(pheno.data.index, args.keep)
     common_idxs = ds.remove_idxs(common_idxs, args.remove)
-    log.info(f"{len(common_idxs)} subjects common in these files.")
+    log.info(f"{len(common_idxs.unique())} subjects after filtering (if applicable).")
     pheno.keep_and_remove(common_idxs)
-    covar.keep_and_remove(common_idxs)
-    covar.cat_covar_intercept()
 
     # estimation
     log.info("Doing FPCA ...")
@@ -363,5 +354,6 @@ def run(args, log):
         file.create_dataset("eg_vectors", data=eg_vectors, dtype="float32")
         file.create_dataset("resid_var", data=resid_var, dtype="float32")
         file.create_dataset("time_grid", data=pheno.time_grid, dtype="float32")
+        file.create_dataset("max_time", data=pheno.max_time, dtype="float32")
 
     log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")

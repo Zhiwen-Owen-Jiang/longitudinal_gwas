@@ -5,7 +5,7 @@ import script.dataset as ds
 from tqdm import tqdm
 from script.relatedness import LOCOpreds
 from script.hail_utils import read_genotype_data, init_hail, get_temp_path, clean
-from script.pace import ReconLDRs
+from script.fpca import FPCAres
 
 
 """
