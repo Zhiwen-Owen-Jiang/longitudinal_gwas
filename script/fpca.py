@@ -1,4 +1,5 @@
 import h5py
+import logging
 import numpy as np
 from abc import ABC, abstractmethod
 from scipy.linalg import cho_solve, cho_factor
@@ -26,11 +27,128 @@ def traz(f, g):
     return res
 
 
+def interp2lin(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, xou: np.ndarray, you: np.ndarray) -> np.ndarray:
+    """
+    Performs bilinear interpolation based on the logic of the provided Rcpp code.
+    The Rcpp code fits f(x,y) = c0 + c1*x + c2*y + c3*x*y to the four cell corners.
+
+    Args:
+        xin (np.ndarray): 1D array of x-coordinates of the grid. Must be sorted.
+        yin (np.ndarray): 1D array of y-coordinates of the grid. Must be sorted.
+        zin (np.ndarray): 1D array of z-values at grid points (flattened, row-major).
+                          zin corresponds to a grid of shape (len(yin), len(xin)).
+        xou (np.ndarray): 1D array of x-coordinates for output points.
+        you (np.ndarray): 1D array of y-coordinates for output points.
+
+    Returns:
+        np.ndarray: 1D array of interpolated z-values for each (xou, you) point.
+    """
+    nXGrid = xin.shape[0]
+    nYGrid = yin.shape[0]
+    nUnknownPoints = xou.shape[0]
+    
+    # Initialize result array with NaNs
+    result = np.full(nUnknownPoints, np.nan)
+    
+    # Handle empty or invalid grid inputs minimally, as per "no input checks"
+    if nXGrid == 0 or nYGrid == 0:
+        return result 
+        
+    # Grid boundaries from the input grid coordinates
+    xmin, xmax = xin[0], xin[-1]
+    ymin, ymax = yin[0], yin[-1]
+    
+    for i in range(nUnknownPoints):
+        xo, yo = xou[i], you[i]
+        
+        # Boundary check from Rcpp: if point is outside the input grid, result is NaN.
+        # The Rcpp condition is: (xmax < xo) || (ymax < yo) || (xmin > xo) || (ymin > yo)
+        # This is equivalent to: not (xmin <= xo <= xmax and ymin <= yo <= ymax)
+        if not (xmin <= xo <= xmax and ymin <= yo <= ymax):
+            result[i] = np.nan
+            continue
+            
+        # Find indices for the interpolation cell corners.
+        # x_idx_upper: index of the smallest xin value that is >= xo
+        # y_idx_upper: index of the smallest yin value that is >= yo
+        # np.searchsorted(side='left') behaves like std::lower_bound.
+        # Given that xmin <= xo <= xmax, x_idx_upper will be in [0, nXGrid-1].
+        # Similarly for y_idx_upper in [0, nYGrid-1].
+        x_idx_upper = np.searchsorted(xin, xo, side='left')
+        y_idx_upper = np.searchsorted(yin, yo, side='left')
+
+        # Ensure x_idx_upper is not out of bounds if xo == xmax and xin has duplicates
+        # (though typically grid vectors are unique and sorted).
+        # If xo == xin[nXGrid-1], searchsorted returns nXGrid-1. This is correct.
+        # This clamping is mostly defensive for unusual xin/yin.
+        x_idx_upper = np.clip(x_idx_upper, 0, nXGrid - 1)
+        y_idx_upper = np.clip(y_idx_upper, 0, nYGrid - 1)
+        
+        # Determine the actual grid coordinate values for the cell's "upper" corner
+        # This corresponds to xa(1) and ya(1) in the Rcpp code.
+        val_xU_coord = xin[x_idx_upper] 
+        val_yU_coord = yin[y_idx_upper]
+
+        # Determine the grid coordinate values for the cell's "lower" corner.
+        # This corresponds to xa(0) and ya(0) in the Rcpp code.
+        if x_idx_upper == 0:
+            x_idx_lower = 0
+        else:
+            # If xo is exactly on xin[x_idx_upper], the Rcpp logic uses xin[x_idx_upper-1] as the lower bound for the cell.
+            x_idx_lower = x_idx_upper - 1
+        val_xL_coord = xin[x_idx_lower]
+        
+        if y_idx_upper == 0:
+            y_idx_lower = 0
+        else:
+            y_idx_lower = y_idx_upper - 1
+        val_yL_coord = yin[y_idx_lower]
+
+        # Retrieve Z values for the four corners of the cell
+        # These are indexed using x_idx_lower, x_idx_upper, y_idx_lower, y_idx_upper.
+        # z00: Z at (val_xL_coord, val_yL_coord)
+        z00 = zin[y_idx_lower * nXGrid + x_idx_lower]
+        # z01: Z at (val_xL_coord, val_yU_coord) - Corresponds to Rcpp's za(1)
+        z01 = zin[y_idx_upper * nXGrid + x_idx_lower]
+        # z10: Z at (val_xU_coord, val_yL_coord) - Corresponds to Rcpp's za(2)
+        z10 = zin[y_idx_lower * nXGrid + x_idx_upper]
+        # z11: Z at (val_xU_coord, val_yU_coord) - Corresponds to Rcpp's za(3)
+        z11 = zin[y_idx_upper * nXGrid + x_idx_upper]
+        
+        # This array `corners_z` matches the order of `za` in the Rcpp code
+        # after mapping its construction.
+        corners_z = np.array([z00, z01, z10, z11])
+        
+        # Construct matrix A for solving coefficients c of f(x,y) = c0 + c1*x + c2*y + c3*x*y
+        # The rows of A correspond to the four corner points:
+        # (xL, yL), (xL, yU), (xU, yL), (xU, yU)
+        A_matrix = np.array([
+            [1, val_xL_coord, val_yL_coord, val_xL_coord * val_yL_coord], # Eq for z00
+            [1, val_xL_coord, val_yU_coord, val_xL_coord * val_yU_coord], # Eq for z01
+            [1, val_xU_coord, val_yL_coord, val_xU_coord * val_yL_coord], # Eq for z10
+            [1, val_xU_coord, val_yU_coord, val_xU_coord * val_yU_coord]  # Eq for z11
+        ])
+        
+        # Solve A_matrix * coeffs = corners_z for coeffs.
+        # np.linalg.lstsq is used for robustness, similar to Rcpp's QR decomposition solver,
+        # especially if the cell is degenerate (e.g., val_xL_coord == val_xU_coord).
+        coeffs, _, _, _ = np.linalg.lstsq(A_matrix, corners_z, rcond=None)
+        
+        # Interpolate the value at (xo, yo) using the solved coefficients
+        # fq = [1, xo, yo, xo*yo]
+        fq_vector = np.array([1, xo, yo, xo * yo])
+        result[i] = fq_vector @ coeffs
+        
+    return result
+
+
 class LocalLinear(ABC):
     """
     Abstract class for local linear estimator.
     
     """
+    GAUSSIAN_CONST = 1 / np.sqrt(2 * np.pi)
+
     def __init__(self, pheno):
         """
         pheno:
@@ -45,16 +163,17 @@ class LocalLinear(ABC):
         self.unique_time = pheno.unique_time
         self.grid_size = pheno.grid_size
         self.time_grid = pheno.time_grid
+        self.time_idx = pheno.time_idx
         self.n_time = len(self.unique_time)
         self.n_grids = len(self.time_grid)
+        self.logger = logging.getLogger(__name__)
 
-    @staticmethod
-    def _gau_kernel(x):
+    def _gau_kernel(self, x):
         """
         Calculating the Gaussian density
 
         """
-        gau_k = 1 / np.sqrt(2 * np.pi) * np.exp(-0.5 * x**2)
+        gau_k = self.GAUSSIAN_CONST * np.exp(-0.5 * x**2)
         if len(gau_k.shape) == 2:
             gau_k = np.prod(gau_k, axis=1).reshape(-1, 1)
         return gau_k.astype(np.float32)
@@ -69,6 +188,7 @@ class LocalLinear(ABC):
             weights = weights.reshape(-1, 1)
         xw = x * weights
         xtx = np.dot(xw.T, x)
+        xtx += np.eye(xtx.shape[0]) * 1e-8
         xty = np.dot(xw.T, y)
         c, lower = cho_factor(xtx)
         beta = cho_solve((c, lower), xty).astype(np.float32)
@@ -85,6 +205,10 @@ class LocalLinear(ABC):
     @abstractmethod
     def estimate(self):
         pass
+
+    @abstractmethod
+    def _get_bw_candidates(self):
+        pass
     
 
 class Mean(LocalLinear):
@@ -95,7 +219,7 @@ class Mean(LocalLinear):
         x = np.hstack([np.ones_like(time_diff), time_diff])
         return x, weights
     
-    def estimate(self, bw):
+    def estimate(self, bw, grid=True):
         mean_function = np.zeros(self.n_time, dtype=np.float32)
         grid_mean_function = np.zeros(self.n_grids, dtype=np.float32)
         
@@ -103,11 +227,59 @@ class Mean(LocalLinear):
             x, weights = self._get_design_matrix(t, bw)
             mean_function[i] = self._wls(x, self.pheno, weights)
 
-        for i, t in enumerate(self.time_grid):
-            x, weights = self._get_design_matrix(t, bw)
-            grid_mean_function[i] = self._wls(x, self.pheno, weights)
+        if grid:
+            for i, t in enumerate(self.time_grid):
+                x, weights = self._get_design_matrix(t, bw)
+                grid_mean_function[i] = self._wls(x, self.pheno, weights)
 
-        return mean_function, grid_mean_function   
+        return mean_function, grid_mean_function
+
+    def _get_bw_candidates(self, time_window):
+        bw_raw = self.n_time ** (-1 / 5) * 0.05 * time_window
+        bw_cand = np.round(bw_raw * np.array([0.5, 1, 2, 3, 5, 10]), 6)
+        return bw_cand
+    
+    def gcv(self):
+        time_window = self.unique_time[-1] - self.unique_time[0]
+        bw_cand = self._get_bw_candidates(time_window)
+        gcv_score = np.zeros(6, dtype=np.float32)
+        const = time_window * self.GAUSSIAN_CONST / len(self.pheno)
+        self.logger.info(f"Selecting bandwidth for mean function from {bw_cand}")
+
+        for i, bw in enumerate(bw_cand):
+            if const / bw >= 1:
+                gcv_score[i] = np.nan
+                self.logger.info(f"The bandwidth {bw} is too small.")
+                continue
+
+            mean_bw, _ = self.estimate(bw, grid=False)
+            gcv_score[i] = np.sum((self.pheno - mean_bw[self.time_idx]) ** 2)
+            
+            if gcv_score[i] == 0:
+                gcv_score[i] = np.nan
+                self.logger.info(f"The bandwidth is too small.")
+                continue
+
+            gcv_score[i] = gcv_score[i] / (1 - const / bw) ** 2
+            self.logger.info(
+                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.3e}."
+            )
+
+        which_min = np.nanargmin(gcv_score)
+        if which_min == 0 or which_min == len(bw_cand) - 1:
+            self.logger.info(
+                (
+                    "WARNING: the optimal bandwidth obtained at the boundary "
+                    "may not be the best one."
+                )
+            )
+        bw_opt = bw_cand[which_min]
+        min_mse = gcv_score[which_min]
+        self.logger.info(
+            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.3e}."
+        )
+
+        return bw_opt
     
 
 class Covariance(LocalLinear):
@@ -336,11 +508,17 @@ def run(args, log):
     pheno.keep_and_remove(common_idxs)
 
     # estimation
-    log.info("Doing FPCA ...")
+    log.info("\nDoing FPCA ...")
     pheno.generate_time_features()
 
     mean_estimator = Mean(pheno)
-    mean, grid_mean = mean_estimator.estimate(0.1)
+    if args.mean_bw is None:
+        mean_bw = mean_estimator.gcv()
+    else:
+        mean_bw = args.mean_bw
+        log.info(f"Using the user provided bandwidth {mean_bw} for estimating mean function.")
+
+    mean, grid_mean = mean_estimator.estimate(mean_bw)
     
     cov_estimator = Covariance(pheno, mean, pheno.time_idx)
     grid_cov, cut_time_grid_diag = cov_estimator.estimate(0.1)
