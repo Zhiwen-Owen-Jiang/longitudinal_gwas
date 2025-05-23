@@ -16,7 +16,7 @@ common_parser = parser.add_argument_group(
 fpca_parser = parser.add_argument_group(
     title="Arguments specific to functional PCA"
 )
-make_ldr_parser = parser.add_argument_group(
+make_ldrs_parser = parser.add_argument_group(
     title="Arguments specific to constructing LDRs"
 )
 relatedness_parser = parser.add_argument_group(
@@ -43,7 +43,7 @@ make_mt_parser = parser.add_argument_group(
 fpca_parser.add_argument(
     "--fpca", action="store_true", help="Functional PCA."
 )
-make_ldr_parser.add_argument(
+make_ldrs_parser.add_argument(
     "--make-ldrs", action="store_true", help="Constructing LDRs."
 )
 relatedness_parser.add_argument(
@@ -446,9 +446,9 @@ def check_accepted_args(module, args, log):
             "mean_bw",
             "cov_bw",
         },
-        "make_ldr": {
+        "make_ldrs": {
             "out",
-            "make_ldr",
+            "make_ldrs",
             "pheno",
             "fpca_res",
             "n_ldrs",

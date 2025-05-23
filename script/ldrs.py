@@ -58,6 +58,8 @@ def pace(pheno, fpca_res):
     time_grid = fpca_res.time_grid
     eg_values = fpca_res.eg_values
     eg_vectors = fpca_res.eg_vectors
+    grid_mean = fpca_res.grid_mean
+    mean = np.interp(unique_time, time_grid, grid_mean)
 
     n_time = len(unique_time)
     n_ldrs = eg_vectors.shape[1]
@@ -75,9 +77,10 @@ def pace(pheno, fpca_res):
         end += len(time)
         time_idx = np.array([unique_time_idx[t] for t in time])
         y_i = pheno[start: end] # (n_time_i, )
+        mean_i = mean[time_idx] # (n_time_i, )
         Sigma_i_inv = inv(fitted_cov[time_idx][:, time_idx]) # (n_time_i, n_time_i)
         eg_vector = interp_eg_vectors[time_idx] # (n_time_i, n_opt)
-        time_ldrs[sub_idx] = np.dot(np.dot(eg_vector.T, Sigma_i_inv), y_i)
+        time_ldrs[sub_idx] = np.dot(np.dot(eg_vector.T, Sigma_i_inv), y_i - mean_i)
         start = end
 
     return time_ldrs
@@ -89,7 +92,7 @@ def check_input(args):
         raise ValueError("--pheno is required")
     if args.covar is None:
         raise ValueError("--covar is required")
-    if args.fpac_res is None:
+    if args.fpca_res is None:
         raise ValueError("--fpac-res is required")
 
 
@@ -133,7 +136,7 @@ def run(args, log):
     )
 
     # save the output
-    ldr_df = pd.DataFrame(ldrs, index=pheno.get_ids())
+    ldr_df = pd.DataFrame(ldrs, index=covar.get_ids())
     ldr_df.to_csv(f"{args.out}_ldr_top{fpca_res.n_bases}.txt", sep="\t")
     np.save(f"{args.out}_ldr_cov_top{fpca_res.n_bases}.npy", ldr_cov)
 

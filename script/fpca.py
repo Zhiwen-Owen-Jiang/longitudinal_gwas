@@ -113,10 +113,6 @@ class Mean(LocalLinear):
 class Covariance(LocalLinear):
     def __init__(self, pheno, mean, time_idx):
         super().__init__(pheno)
-        self.n_obs_adj = np.repeat(
-            1 / (self.n_obs * (self.n_obs - 1)), self.n_obs * (self.n_obs - 1)
-        ).reshape(-1, 1)
-        
         self.two_way_pheno = np.zeros(
             np.sum(self.n_obs ** 2 - self.n_obs), 
             dtype=np.float32
@@ -149,28 +145,30 @@ class Covariance(LocalLinear):
             start1 = end1
             start2 = end2
 
-        self.unique_time_comb = np.zeros((self.n_time ** 2 - self.n_time, 2), dtype=np.float32)
-        self.mean_pheno = np.zeros(self.n_time ** 2 - self.n_time, dtype=np.float32)
-        self.time_comb_count = np.zeros((self.n_time ** 2 - self.n_time, 1), dtype=np.int32)
-        k = 0
-        for i in range(self.n_time):
-            for j in range(self.n_time):
-                if i != j:
-                    t1 = self.unique_time[i]
-                    t2 = self.unique_time[j]
-                    self.unique_time_comb[k] = np.array([t1, t2])
-                    time_comb_idx = (self.two_way_time == self.unique_time_comb[k]).all(axis=1)
-                    self.time_comb_count[k] = np.sum(time_comb_idx)
-                    self.mean_pheno[k] = np.mean(self.two_way_pheno[time_comb_idx], axis=0)
-                    k += 1
+        # self.unique_time_comb = np.zeros((self.n_time ** 2 - self.n_time, 2), dtype=np.float32)
+        # self.mean_pheno = np.zeros(self.n_time ** 2 - self.n_time, dtype=np.float32)
+        # self.time_comb_count = np.zeros((self.n_time ** 2 - self.n_time, 1), dtype=np.int32)
+        # k = 0
+        # for i in range(self.n_time):
+        #     for j in range(self.n_time):
+        #         if i != j:
+        #             t1 = self.unique_time[i]
+        #             t2 = self.unique_time[j]
+        #             self.unique_time_comb[k] = np.array([t1, t2])
+        #             time_comb_idx = (self.two_way_time == self.unique_time_comb[k]).all(axis=1)
+        #             self.time_comb_count[k] = np.sum(time_comb_idx)
+        #             self.mean_pheno[k] = np.mean(self.two_way_pheno[time_comb_idx], axis=0)
+        #             k += 1
 
     def _get_design_matrix(self, t1, t2, bw):
         """
         TODO: set large distances as 0.
         
         """
-        time_diff = self.unique_time_comb - np.array([t1, t2])
-        weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
+        # time_diff = self.unique_time_comb - np.array([t1, t2])
+        time_diff = self.two_way_time - np.array([t1, t2])
+        # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
+        weights = self._gau_kernel(time_diff / bw)
         x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
         return x, weights
     
@@ -180,7 +178,8 @@ class Covariance(LocalLinear):
         
         """
         time_diff = time - t
-        weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
+        # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
+        weights = self._gau_kernel(time_diff / bw)
         time_diff[:, 1] = time_diff[:, 1] ** 2
         x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
         return x, weights
@@ -191,7 +190,8 @@ class Covariance(LocalLinear):
         for t1 in range(self.n_grids):
             for t2 in range(t1, self.n_grids):
                 x, weights = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
-                grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
+                # grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
+                grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno, weights)
         
         iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
         grid_cov_function[(iu_cols, iu_rows)] = grid_cov_function[(iu_rows, iu_cols)]
@@ -203,16 +203,19 @@ class Covariance(LocalLinear):
         cut_time_grid = np.tile(cut_time_grid.reshape(-1, 1), 2)
         n_cut_time_grid = cut_time_grid.shape[0]
         rotation_matrix = np.array([[1, 1], [-1, 1]]).T * (np.sqrt(2) / 2)
-        rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
+        # rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
+        rotated_two_way_time = np.dot(self.two_way_time, rotation_matrix)
         rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
         cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
         for t in range(n_cut_time_grid):
             x, weights = self._get_design_matrix2(
-                rotated_time_comb, 
+                # rotated_time_comb, 
+                rotated_two_way_time,
                 rotated_cut_time_grid[t],
                 0.1
             )
-            cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
+            # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
+            cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
 
         return grid_cov_function, cut_time_grid_diag
     
@@ -288,8 +291,10 @@ class FPCAres:
         with h5py.File(file_path, "r") as file:
             self.eg_values = file["eg_values"][:]
             self.eg_vectors = file["eg_vectors"][:]
-            self.resid_var = file["resid_var"][:]
+            self.resid_var = file["resid_var"][()]
             self.time_grid = file["time_grid"][:]
+            self.max_time = file["max_time"][()]
+            self.grid_mean = file["grid_mean"][()]
 
         self.n_bases = len(self.eg_values)
             
@@ -335,7 +340,7 @@ def run(args, log):
     pheno.generate_time_features()
 
     mean_estimator = Mean(pheno)
-    mean, grid_mean = mean_estimator.estimate(0.05)
+    mean, grid_mean = mean_estimator.estimate(0.1)
     
     cov_estimator = Covariance(pheno, mean, pheno.time_idx)
     grid_cov, cut_time_grid_diag = cov_estimator.estimate(0.1)
@@ -355,5 +360,6 @@ def run(args, log):
         file.create_dataset("resid_var", data=resid_var, dtype="float32")
         file.create_dataset("time_grid", data=pheno.time_grid, dtype="float32")
         file.create_dataset("max_time", data=pheno.max_time, dtype="float32")
+        file.create_dataset("grid_mean", data=grid_mean, dtype="float32")
 
     log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")
