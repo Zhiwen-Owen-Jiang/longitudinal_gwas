@@ -1,31 +1,35 @@
 import h5py
 import logging
 import numpy as np
+from numba import njit, prange
 from abc import ABC, abstractmethod
 from scipy.linalg import cho_solve, cho_factor
 import script.dataset as ds
 
 
-
+@njit(parallel=True)
 def traz(f, g):
     """
     Numeric integration using trapezoid rule
     
     """
-    if len(f) != len(g):
+    if f.shape[0] != g.shape[0]:
         raise ValueError('f and g have different lengths')
-    if not all(f[i] < f[i+1] for i in range(len(f)-1)):
-        raise ValueError('f must be strictly increasing')
-    res = 0
-    for i in range(len(f) - 1):
+    for i in range(f.shape[0] - 1):
+        if f[i] >= f[i+1]:
+            raise ValueError('f must be strictly increasing')
+    res = 0.0
+    for i in prange(len(f) - 1):
         res += 0.5 * (f[i+1] - f[i]) * (g[i] + g[i+1])
     return res
 
 
-def interp2lin(xin, yin, zin, xou, you):
+@njit(parallel=True)
+def interp2lin_numba(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, 
+                       xou: np.ndarray, you: np.ndarray) -> np.ndarray:
     """
-    Performs bilinear interpolation based on the logic of the provided Rcpp code.
-    The Rcpp code fits f(x,y) = c0 + c1*x + c2*y + c3*x*y to the four cell corners.
+    Performs bilinear interpolation, Numba-compatible.
+    The logic fits f(x,y) = c0 + c1*x + c2*y + c3*x*y to the four cell corners.
 
     Args:
         xin (np.ndarray): 1D array of x-coordinates of the grid. Must be sorted.
@@ -44,59 +48,76 @@ def interp2lin(xin, yin, zin, xou, you):
     
     result = np.full(nUnknownPoints, np.nan)
     
-    if nXGrid == 0 or nYGrid == 0:
+    if nXGrid == 0 or nYGrid == 0 or nUnknownPoints == 0:
         return result 
         
-    xmin, xmax = xin[0], xin[-1]
-    ymin, ymax = yin[0], yin[-1]
+    xmin_grid, xmax_grid = xin[0], xin[-1]
+    ymin_grid, ymax_grid = yin[0], yin[-1]
     
-    for i in range(nUnknownPoints):
+    epsilon = 1e-9 
+
+    for i in prange(nUnknownPoints):
         xo, yo = xou[i], you[i]
         
-        if not (xmin <= xo <= xmax and ymin <= yo <= ymax):
+        if not (xmin_grid <= xo <= xmax_grid and ymin_grid <= yo <= ymax_grid):
             result[i] = np.nan
             continue
             
         x_idx_upper = np.searchsorted(xin, xo, side='left')
         y_idx_upper = np.searchsorted(yin, yo, side='left')
 
-        x_idx_upper = np.clip(x_idx_upper, 0, nXGrid - 1)
-        y_idx_upper = np.clip(y_idx_upper, 0, nYGrid - 1)
+        x_idx_upper = max(0, min(x_idx_upper, nXGrid - 1))
+        y_idx_upper = max(0, min(y_idx_upper, nYGrid - 1))
         
         val_xU_coord = xin[x_idx_upper] 
         val_yU_coord = yin[y_idx_upper]
 
-        if x_idx_upper == 0:
+        if x_idx_upper == 0: # xo is at or before the first grid line
             x_idx_lower = 0
         else:
             x_idx_lower = x_idx_upper - 1
         val_xL_coord = xin[x_idx_lower]
         
-        if y_idx_upper == 0:
+        if y_idx_upper == 0: # yo is at or before the first grid line
             y_idx_lower = 0
         else:
             y_idx_lower = y_idx_upper - 1
         val_yL_coord = yin[y_idx_lower]
 
-        z00 = zin[y_idx_lower * nXGrid + x_idx_lower]
-        z01 = zin[y_idx_upper * nXGrid + x_idx_lower]
-        z10 = zin[y_idx_lower * nXGrid + x_idx_upper]
-        z11 = zin[y_idx_upper * nXGrid + x_idx_upper]
+        z00 = zin[y_idx_lower * nXGrid + x_idx_lower] # Z at (xL, yL)
+        z01 = zin[y_idx_upper * nXGrid + x_idx_lower] # Z at (xL, yU)
+        z10 = zin[y_idx_lower * nXGrid + x_idx_upper] # Z at (xU, yL)
+        z11 = zin[y_idx_upper * nXGrid + x_idx_upper] # Z at (xU, yU)
         
-        corners_z = np.array([z00, z01, z10, z11])
-        
-        A_matrix = np.array([
-            [1, val_xL_coord, val_yL_coord, val_xL_coord * val_yL_coord], # Eq for z00
-            [1, val_xL_coord, val_yU_coord, val_xL_coord * val_yU_coord], # Eq for z01
-            [1, val_xU_coord, val_yL_coord, val_xU_coord * val_yL_coord], # Eq for z10
-            [1, val_xU_coord, val_yU_coord, val_xU_coord * val_yU_coord]  # Eq for z11
-        ])
-        
-        coeffs, _, _, _ = np.linalg.lstsq(A_matrix, corners_z, rcond=None)
-        
-        fq_vector = np.array([1, xo, yo, xo * yo])
-        result[i] = fq_vector @ coeffs
-        
+        dx = val_xU_coord - val_xL_coord
+        dy = val_yU_coord - val_yL_coord
+
+        if abs(dx) < epsilon and abs(dy) < epsilon: # Cell is a point
+            result[i] = z00 # All four z values should be the same
+        elif abs(dx) < epsilon: # Cell is a vertical line (val_xL_coord approx val_xU_coord)
+            if abs(dy) < epsilon: # Should have been caught by point case, but for safety
+                 result[i] = z00
+            else: # Interpolate along Y
+                t = (yo - val_yL_coord) / dy
+                result[i] = (1.0 - t) * z00 + t * z01 
+        elif abs(dy) < epsilon: # Cell is a horizontal line (val_yL_coord approx val_yU_coord)
+            # abs(dx) >= epsilon here
+            t = (xo - val_xL_coord) / dx
+            result[i] = (1.0 - t) * z00 + t * z10
+        else: # Non-degenerate cell: proceed with 4x4 system
+            corners_z = np.array([z00, z01, z10, z11], dtype=np.float64)
+            
+            A_matrix = np.array([
+                [1.0, val_xL_coord, val_yL_coord, val_xL_coord * val_yL_coord],
+                [1.0, val_xL_coord, val_yU_coord, val_xL_coord * val_yU_coord],
+                [1.0, val_xU_coord, val_yL_coord, val_xU_coord * val_yL_coord],
+                [1.0, val_xU_coord, val_yU_coord, val_xU_coord * val_yU_coord]
+            ], dtype=np.float64)
+            
+            coeffs = np.linalg.solve(A_matrix, corners_z)
+            fq_vector = np.array([1.0, xo, yo, xo * yo], dtype=np.float64)
+            result[i] = fq_vector @ coeffs
+                
     return result
 
 
@@ -146,7 +167,7 @@ class LocalLinear(ABC):
             weights = weights.reshape(-1, 1)
         xw = x * weights
         xtx = np.dot(xw.T, x)
-        xtx += np.eye(xtx.shape[0]) * 1e-8
+        # xtx += np.eye(xtx.shape[0]) * 1e-8
         xty = np.dot(xw.T, y)
         c, lower = cho_factor(xtx)
         beta = cho_solve((c, lower), xty).astype(np.float32)
@@ -344,7 +365,7 @@ class Covariance(LocalLinear):
                     # rotated_time_comb, 
                     rotated_two_way_time,
                     rotated_cut_time_grid[t],
-                    0.1
+                    bw,
                 )
                 # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
                 cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
@@ -365,7 +386,7 @@ class Covariance(LocalLinear):
                 continue
 
             grid_cov = self.estimate(bw, grid=True)
-            cov = interp2lin(
+            cov = interp2lin_numba(
                 self.time_grid, self.time_grid, grid_cov.reshape(-1), 
                 self.two_way_time[:, 0], self.two_way_time[:, 1]
             )
