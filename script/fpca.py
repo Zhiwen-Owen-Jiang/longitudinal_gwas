@@ -5,11 +5,6 @@ from abc import ABC, abstractmethod
 from scipy.linalg import cho_solve, cho_factor
 import script.dataset as ds
 
-"""
-TODO:
-1. select bandwidth?
-
-"""
 
 
 def traz(f, g):
@@ -27,7 +22,7 @@ def traz(f, g):
     return res
 
 
-def interp2lin(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, xou: np.ndarray, you: np.ndarray) -> np.ndarray:
+def interp2lin(xin, yin, zin, xou, you):
     """
     Performs bilinear interpolation based on the logic of the provided Rcpp code.
     The Rcpp code fits f(x,y) = c0 + c1*x + c2*y + c3*x*y to the four cell corners.
@@ -47,54 +42,33 @@ def interp2lin(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, xou: np.ndarra
     nYGrid = yin.shape[0]
     nUnknownPoints = xou.shape[0]
     
-    # Initialize result array with NaNs
     result = np.full(nUnknownPoints, np.nan)
     
-    # Handle empty or invalid grid inputs minimally, as per "no input checks"
     if nXGrid == 0 or nYGrid == 0:
         return result 
         
-    # Grid boundaries from the input grid coordinates
     xmin, xmax = xin[0], xin[-1]
     ymin, ymax = yin[0], yin[-1]
     
     for i in range(nUnknownPoints):
         xo, yo = xou[i], you[i]
         
-        # Boundary check from Rcpp: if point is outside the input grid, result is NaN.
-        # The Rcpp condition is: (xmax < xo) || (ymax < yo) || (xmin > xo) || (ymin > yo)
-        # This is equivalent to: not (xmin <= xo <= xmax and ymin <= yo <= ymax)
         if not (xmin <= xo <= xmax and ymin <= yo <= ymax):
             result[i] = np.nan
             continue
             
-        # Find indices for the interpolation cell corners.
-        # x_idx_upper: index of the smallest xin value that is >= xo
-        # y_idx_upper: index of the smallest yin value that is >= yo
-        # np.searchsorted(side='left') behaves like std::lower_bound.
-        # Given that xmin <= xo <= xmax, x_idx_upper will be in [0, nXGrid-1].
-        # Similarly for y_idx_upper in [0, nYGrid-1].
         x_idx_upper = np.searchsorted(xin, xo, side='left')
         y_idx_upper = np.searchsorted(yin, yo, side='left')
 
-        # Ensure x_idx_upper is not out of bounds if xo == xmax and xin has duplicates
-        # (though typically grid vectors are unique and sorted).
-        # If xo == xin[nXGrid-1], searchsorted returns nXGrid-1. This is correct.
-        # This clamping is mostly defensive for unusual xin/yin.
         x_idx_upper = np.clip(x_idx_upper, 0, nXGrid - 1)
         y_idx_upper = np.clip(y_idx_upper, 0, nYGrid - 1)
         
-        # Determine the actual grid coordinate values for the cell's "upper" corner
-        # This corresponds to xa(1) and ya(1) in the Rcpp code.
         val_xU_coord = xin[x_idx_upper] 
         val_yU_coord = yin[y_idx_upper]
 
-        # Determine the grid coordinate values for the cell's "lower" corner.
-        # This corresponds to xa(0) and ya(0) in the Rcpp code.
         if x_idx_upper == 0:
             x_idx_lower = 0
         else:
-            # If xo is exactly on xin[x_idx_upper], the Rcpp logic uses xin[x_idx_upper-1] as the lower bound for the cell.
             x_idx_lower = x_idx_upper - 1
         val_xL_coord = xin[x_idx_lower]
         
@@ -104,24 +78,13 @@ def interp2lin(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, xou: np.ndarra
             y_idx_lower = y_idx_upper - 1
         val_yL_coord = yin[y_idx_lower]
 
-        # Retrieve Z values for the four corners of the cell
-        # These are indexed using x_idx_lower, x_idx_upper, y_idx_lower, y_idx_upper.
-        # z00: Z at (val_xL_coord, val_yL_coord)
         z00 = zin[y_idx_lower * nXGrid + x_idx_lower]
-        # z01: Z at (val_xL_coord, val_yU_coord) - Corresponds to Rcpp's za(1)
         z01 = zin[y_idx_upper * nXGrid + x_idx_lower]
-        # z10: Z at (val_xU_coord, val_yL_coord) - Corresponds to Rcpp's za(2)
         z10 = zin[y_idx_lower * nXGrid + x_idx_upper]
-        # z11: Z at (val_xU_coord, val_yU_coord) - Corresponds to Rcpp's za(3)
         z11 = zin[y_idx_upper * nXGrid + x_idx_upper]
         
-        # This array `corners_z` matches the order of `za` in the Rcpp code
-        # after mapping its construction.
         corners_z = np.array([z00, z01, z10, z11])
         
-        # Construct matrix A for solving coefficients c of f(x,y) = c0 + c1*x + c2*y + c3*x*y
-        # The rows of A correspond to the four corner points:
-        # (xL, yL), (xL, yU), (xU, yL), (xU, yU)
         A_matrix = np.array([
             [1, val_xL_coord, val_yL_coord, val_xL_coord * val_yL_coord], # Eq for z00
             [1, val_xL_coord, val_yU_coord, val_xL_coord * val_yU_coord], # Eq for z01
@@ -129,13 +92,8 @@ def interp2lin(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray, xou: np.ndarra
             [1, val_xU_coord, val_yU_coord, val_xU_coord * val_yU_coord]  # Eq for z11
         ])
         
-        # Solve A_matrix * coeffs = corners_z for coeffs.
-        # np.linalg.lstsq is used for robustness, similar to Rcpp's QR decomposition solver,
-        # especially if the cell is degenerate (e.g., val_xL_coord == val_xU_coord).
         coeffs, _, _, _ = np.linalg.lstsq(A_matrix, corners_z, rcond=None)
         
-        # Interpolate the value at (xo, yo) using the solved coefficients
-        # fq = [1, xo, yo, xo*yo]
         fq_vector = np.array([1, xo, yo, xo * yo])
         result[i] = fq_vector @ coeffs
         
@@ -194,6 +152,11 @@ class LocalLinear(ABC):
         beta = cho_solve((c, lower), xty).astype(np.float32)
         return beta[0]
     
+    def _get_bw_candidates(self, time_window):
+        bw_raw = self.n_time ** (-1 / 5) * 0.05 * time_window
+        bw_cand = np.round(bw_raw * np.array([0.5, 1, 2, 3, 5, 10]), 6)
+        return bw_cand
+    
     @abstractmethod
     def _get_design_matrix(self):
         """
@@ -206,10 +169,6 @@ class LocalLinear(ABC):
     def estimate(self):
         pass
 
-    @abstractmethod
-    def _get_bw_candidates(self):
-        pass
-    
 
 class Mean(LocalLinear):
     def _get_design_matrix(self, t, bw):
@@ -220,31 +179,28 @@ class Mean(LocalLinear):
         return x, weights
     
     def estimate(self, bw, grid=True):
-        mean_function = np.zeros(self.n_time, dtype=np.float32)
-        grid_mean_function = np.zeros(self.n_grids, dtype=np.float32)
-        
-        for i, t in enumerate(self.unique_time):
-            x, weights = self._get_design_matrix(t, bw)
-            mean_function[i] = self._wls(x, self.pheno, weights)
-
         if grid:
+            grid_mean_function = np.zeros(self.n_grids, dtype=np.float32)
             for i, t in enumerate(self.time_grid):
                 x, weights = self._get_design_matrix(t, bw)
                 grid_mean_function[i] = self._wls(x, self.pheno, weights)
 
-        return mean_function, grid_mean_function
+            return grid_mean_function
 
-    def _get_bw_candidates(self, time_window):
-        bw_raw = self.n_time ** (-1 / 5) * 0.05 * time_window
-        bw_cand = np.round(bw_raw * np.array([0.5, 1, 2, 3, 5, 10]), 6)
-        return bw_cand
-    
+        else:
+            mean_function = np.zeros(self.n_time, dtype=np.float32)
+            for i, t in enumerate(self.unique_time):
+                x, weights = self._get_design_matrix(t, bw)
+                mean_function[i] = self._wls(x, self.pheno, weights)
+                
+            return mean_function
+
     def gcv(self):
         time_window = self.unique_time[-1] - self.unique_time[0]
         bw_cand = self._get_bw_candidates(time_window)
         gcv_score = np.zeros(6, dtype=np.float32)
         const = time_window * self.GAUSSIAN_CONST / len(self.pheno)
-        self.logger.info(f"Selecting bandwidth for mean function from {bw_cand}")
+        self.logger.info(f"Selecting bandwidth for mean function from {bw_cand}.")
 
         for i, bw in enumerate(bw_cand):
             if const / bw >= 1:
@@ -252,8 +208,8 @@ class Mean(LocalLinear):
                 self.logger.info(f"The bandwidth {bw} is too small.")
                 continue
 
-            mean_bw, _ = self.estimate(bw, grid=False)
-            gcv_score[i] = np.sum((self.pheno - mean_bw[self.time_idx]) ** 2)
+            mean = self.estimate(bw, grid=False)
+            gcv_score[i] = np.sum((self.pheno - mean[self.time_idx]) ** 2)
             
             if gcv_score[i] == 0:
                 gcv_score[i] = np.nan
@@ -283,7 +239,7 @@ class Mean(LocalLinear):
     
 
 class Covariance(LocalLinear):
-    def __init__(self, pheno, mean, time_idx):
+    def __init__(self, pheno, mean):
         super().__init__(pheno)
         self.two_way_pheno = np.zeros(
             np.sum(self.n_obs ** 2 - self.n_obs), 
@@ -309,7 +265,7 @@ class Covariance(LocalLinear):
 
             # pheno
             sub_pheno = self.pheno[start1: end1]
-            sub_pheno = sub_pheno - mean[time_idx[start1: end1]]
+            sub_pheno = sub_pheno - mean[self.time_idx[start1: end1]]
             sub_pheno = sub_pheno.reshape(-1, 1)
             outer_prod_sub_pheno = np.dot(sub_pheno, sub_pheno.T)
             self.two_way_pheno[start2: end2] = outer_prod_sub_pheno[off_diag]
@@ -356,40 +312,90 @@ class Covariance(LocalLinear):
         x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
         return x, weights
     
-    def estimate(self, bw):
-        grid_cov_function = np.zeros((self.n_grids, self.n_grids), dtype=np.float32)
+    def estimate(self, bw, grid=True):
+        if grid:
+            grid_cov_function = np.zeros((self.n_grids, self.n_grids), dtype=np.float32)
 
-        for t1 in range(self.n_grids):
-            for t2 in range(t1, self.n_grids):
-                x, weights = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
-                # grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
-                grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno, weights)
-        
-        iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
-        grid_cov_function[(iu_cols, iu_rows)] = grid_cov_function[(iu_rows, iu_cols)]
+            for t1 in range(self.n_grids):
+                for t2 in range(t1, self.n_grids):
+                    x, weights = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
+                    # grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
+                    grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno, weights)
+            
+            iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
+            grid_cov_function[(iu_cols, iu_rows)] = grid_cov_function[(iu_rows, iu_cols)]
 
-        cut_time_grid = self.time_grid[
-            (self.time_grid > np.quantile(self.time_grid, 0.25)) & 
-            (self.time_grid < np.quantile(self.time_grid, 0.75))
-        ]
-        cut_time_grid = np.tile(cut_time_grid.reshape(-1, 1), 2)
-        n_cut_time_grid = cut_time_grid.shape[0]
-        rotation_matrix = np.array([[1, 1], [-1, 1]]).T * (np.sqrt(2) / 2)
-        # rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
-        rotated_two_way_time = np.dot(self.two_way_time, rotation_matrix)
-        rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
-        cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
-        for t in range(n_cut_time_grid):
-            x, weights = self._get_design_matrix2(
-                # rotated_time_comb, 
-                rotated_two_way_time,
-                rotated_cut_time_grid[t],
-                0.1
+            return grid_cov_function
+
+        else:
+            cut_time_grid = self.time_grid[
+                (self.time_grid > np.quantile(self.time_grid, 0.25)) & 
+                (self.time_grid < np.quantile(self.time_grid, 0.75))
+            ]
+            cut_time_grid = np.tile(cut_time_grid.reshape(-1, 1), 2)
+            n_cut_time_grid = cut_time_grid.shape[0]
+            rotation_matrix = np.array([[1, 1], [-1, 1]]).T * (np.sqrt(2) / 2)
+            # rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
+            rotated_two_way_time = np.dot(self.two_way_time, rotation_matrix)
+            rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
+            cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
+            for t in range(n_cut_time_grid):
+                x, weights = self._get_design_matrix2(
+                    # rotated_time_comb, 
+                    rotated_two_way_time,
+                    rotated_cut_time_grid[t],
+                    0.1
+                )
+                # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
+                cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
+
+            return cut_time_grid_diag
+    
+    def gcv(self):
+        time_window = self.unique_time[-1] - self.unique_time[0]
+        bw_cand = self._get_bw_candidates(time_window)
+        gcv_score = np.zeros(6, dtype=np.float32)
+        const = 3 * (time_window * self.GAUSSIAN_CONST) ** 2 / len(self.two_way_pheno)
+        self.logger.info(f"Selecting bandwidth for covariance function from {bw_cand}.")
+
+        for i, bw in enumerate(bw_cand):
+            if const / bw ** 2 >= 1:
+                gcv_score[i] = np.nan
+                self.logger.info(f"The bandwidth {bw} is too small.")
+                continue
+
+            grid_cov = self.estimate(bw, grid=True)
+            cov = interp2lin(
+                self.time_grid, self.time_grid, grid_cov.reshape(-1), 
+                self.two_way_time[:, 0], self.two_way_time[:, 1]
             )
-            # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
-            cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
+            gcv_score[i] = np.sum((self.two_way_pheno - cov) ** 2)
+            
+            if gcv_score[i] == 0:
+                gcv_score[i] = np.nan
+                self.logger.info(f"The bandwidth is too small.")
+                continue
 
-        return grid_cov_function, cut_time_grid_diag
+            gcv_score[i] = gcv_score[i] / (1 - const / bw ** 2) ** 2
+            self.logger.info(
+                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.3e}."
+            )
+
+        which_min = np.nanargmin(gcv_score)
+        if which_min == 0 or which_min == len(bw_cand) - 1:
+            self.logger.info(
+                (
+                    "WARNING: the optimal bandwidth obtained at the boundary "
+                    "may not be the best one."
+                )
+            )
+        bw_opt = bw_cand[which_min]
+        min_mse = gcv_score[which_min]
+        self.logger.info(
+            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.3e}."
+        )
+
+        return bw_opt
     
 
 class ResidualVariance(LocalLinear):
@@ -400,8 +406,9 @@ class ResidualVariance(LocalLinear):
         x = np.hstack([np.ones_like(time_diff), time_diff])
         return x, weights
     
-    def estimate(self, mean, diag, time_idx, bw):
-        one_way_mean = mean[time_idx]
+    def estimate(self, mean, diag, bw):
+        time_window = self.unique_time[-1] - self.unique_time[0]
+        one_way_mean = mean[self.time_idx]
         grid_resid_var = np.zeros(self.n_grids, dtype=np.float32)
 
         for i, t in enumerate(self.time_grid):
@@ -416,7 +423,7 @@ class ResidualVariance(LocalLinear):
             (self.time_grid > np.quantile(self.time_grid, 0.25)) & 
             (self.time_grid < np.quantile(self.time_grid, 0.75))
         ]
-        resid_var = traz(cut_time_grid, (grid_resid_var - diag)) / 0.5 # TODO: check it
+        resid_var = traz(cut_time_grid, (grid_resid_var - diag)) / (0.5 * time_window) 
 
         return resid_var
     
@@ -446,12 +453,12 @@ def eigen(grid_mean, grid_cov, grid_size, time_grid):
     eg_values = eg_values[eg_values > 0]
     
     fve = np.cumsum(eg_values) / np.sum(eg_values)
-    n_opt = np.argmax(fve > 0.98) + 1
+    n_opt = np.argmax(fve > 0.99) + 1
     eg_values = eg_values[:n_opt] * grid_size
     eg_vectors = eg_vectors[:, :n_opt]
 
     for j in range(n_opt):
-        eg_vectors[:, j] = eg_vectors[:, j] / np.sqrt(traz(time_grid, eg_vectors[:, j] ** 2))
+        eg_vectors[:, j] /= np.sqrt(traz(time_grid, eg_vectors[:, j] ** 2))
         if np.sum(eg_vectors[:, j] * grid_mean) < 0:
             eg_vectors[:, j] = -eg_vectors[:, j]
         
@@ -516,16 +523,24 @@ def run(args, log):
         mean_bw = mean_estimator.gcv()
     else:
         mean_bw = args.mean_bw
-        log.info(f"Using the user provided bandwidth {mean_bw} for estimating mean function.")
+        log.info(f"Using bandwidth {mean_bw} for estimating mean function.")
 
-    mean, grid_mean = mean_estimator.estimate(mean_bw)
+    mean = mean_estimator.estimate(mean_bw, grid=False)
+    grid_mean = mean_estimator.estimate(mean_bw, grid=True)
     
-    cov_estimator = Covariance(pheno, mean, pheno.time_idx)
-    grid_cov, cut_time_grid_diag = cov_estimator.estimate(0.1)
+    cov_estimator = Covariance(pheno, mean)
+    if args.cov_bw is None:
+        cov_bw = cov_estimator.gcv()
+    else:
+        cov_bw = args.cov_bw
+        log.info(f"Using bandwidth {cov_bw} for estimating covariance function.")
+
+    grid_cov = cov_estimator.estimate(cov_bw, grid=True)
+    cut_time_grid_diag = cov_estimator.estimate(cov_bw, grid=False)
 
     resid_var_estimator = ResidualVariance(pheno)
     resid_var = resid_var_estimator.estimate(
-        mean, cut_time_grid_diag, pheno.time_idx, 0.1
+        mean, cut_time_grid_diag, cov_bw
     )
 
     # eigen
