@@ -167,7 +167,7 @@ class LocalLinear(ABC):
             weights = weights.reshape(-1, 1)
         xw = x * weights
         xtx = np.dot(xw.T, x)
-        # xtx += np.eye(xtx.shape[0]) * 1e-8
+        xtx += np.eye(xtx.shape[0]) * 1e-8
         xty = np.dot(xw.T, y)
         c, lower = cho_factor(xtx)
         beta = cho_solve((c, lower), xty).astype(np.float32)
@@ -194,25 +194,27 @@ class LocalLinear(ABC):
 class Mean(LocalLinear):
     def _get_design_matrix(self, t, bw):
         time_diff = self.time - t
-        weights = self._gau_kernel(time_diff / bw)
-        time_diff = time_diff.reshape(-1, 1)
+        normed_time_diff = time_diff / bw
+        mask = (normed_time_diff > -6) & (normed_time_diff < 6)
+        weights = self._gau_kernel(normed_time_diff[mask])
+        time_diff = time_diff[mask].reshape(-1, 1)
         x = np.hstack([np.ones_like(time_diff), time_diff])
-        return x, weights
+        return x, weights, mask
     
     def estimate(self, bw, grid=True):
         if grid:
             grid_mean_function = np.zeros(self.n_grids, dtype=np.float32)
             for i, t in enumerate(self.time_grid):
-                x, weights = self._get_design_matrix(t, bw)
-                grid_mean_function[i] = self._wls(x, self.pheno, weights)
+                x, weights, mask = self._get_design_matrix(t, bw)
+                grid_mean_function[i] = self._wls(x, self.pheno[mask], weights)
 
             return grid_mean_function
 
         else:
             mean_function = np.zeros(self.n_time, dtype=np.float32)
             for i, t in enumerate(self.unique_time):
-                x, weights = self._get_design_matrix(t, bw)
-                mean_function[i] = self._wls(x, self.pheno, weights)
+                x, weights, mask = self._get_design_matrix(t, bw)
+                mean_function[i] = self._wls(x, self.pheno[mask], weights)
                 
             return mean_function
 
@@ -239,7 +241,7 @@ class Mean(LocalLinear):
 
             gcv_score[i] = gcv_score[i] / (1 - const / bw) ** 2
             self.logger.info(
-                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.3e}."
+                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.4e}."
             )
 
         which_min = np.nanargmin(gcv_score)
@@ -253,7 +255,7 @@ class Mean(LocalLinear):
         bw_opt = bw_cand[which_min]
         min_mse = gcv_score[which_min]
         self.logger.info(
-            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.3e}."
+            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.4e}."
         )
 
         return bw_opt
@@ -310,16 +312,14 @@ class Covariance(LocalLinear):
         #             k += 1
 
     def _get_design_matrix(self, t1, t2, bw):
-        """
-        TODO: set large distances as 0.
-        
-        """
         # time_diff = self.unique_time_comb - np.array([t1, t2])
         time_diff = self.two_way_time - np.array([t1, t2])
         # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
-        weights = self._gau_kernel(time_diff / bw)
-        x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
-        return x, weights
+        normed_time_diff = time_diff / bw
+        mask = np.sum(np.abs(normed_time_diff), axis=1) < 6
+        weights = self._gau_kernel(normed_time_diff[mask])
+        x = np.hstack([np.ones_like(weights, dtype=np.float32), time_diff[mask]])
+        return x, weights, mask
     
     def _get_design_matrix2(self, time, t, bw):
         """
@@ -339,9 +339,9 @@ class Covariance(LocalLinear):
 
             for t1 in range(self.n_grids):
                 for t2 in range(t1, self.n_grids):
-                    x, weights = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
+                    x, weights, mask = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
                     # grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
-                    grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno, weights)
+                    grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno[mask], weights)
             
             iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
             grid_cov_function[(iu_cols, iu_rows)] = grid_cov_function[(iu_rows, iu_cols)]
@@ -399,7 +399,7 @@ class Covariance(LocalLinear):
 
             gcv_score[i] = gcv_score[i] / (1 - const / bw ** 2) ** 2
             self.logger.info(
-                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.3e}."
+                f"The GCV score for bandwidth {bw} is {gcv_score[i]:.4e}."
             )
 
         which_min = np.nanargmin(gcv_score)
@@ -413,7 +413,7 @@ class Covariance(LocalLinear):
         bw_opt = bw_cand[which_min]
         min_mse = gcv_score[which_min]
         self.logger.info(
-            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.3e}."
+            f"The optimal bandwidth is {bw_opt} with GCV score {min_mse:.4e}."
         )
 
         return bw_opt
@@ -422,10 +422,12 @@ class Covariance(LocalLinear):
 class ResidualVariance(LocalLinear):
     def _get_design_matrix(self, t, bw):
         time_diff = self.time - t
-        weights = self._gau_kernel(time_diff / bw)
-        time_diff = time_diff.reshape(-1, 1)
+        normed_time_diff = time_diff / bw
+        mask = (normed_time_diff > -6) & (normed_time_diff < 6)
+        weights = self._gau_kernel(normed_time_diff[mask])
+        time_diff = time_diff[mask].reshape(-1, 1)
         x = np.hstack([np.ones_like(time_diff), time_diff])
-        return x, weights
+        return x, weights, mask
     
     def estimate(self, mean, diag, bw):
         time_window = self.unique_time[-1] - self.unique_time[0]
@@ -433,8 +435,9 @@ class ResidualVariance(LocalLinear):
         grid_resid_var = np.zeros(self.n_grids, dtype=np.float32)
 
         for i, t in enumerate(self.time_grid):
-            x, weights = self._get_design_matrix(t, bw)
-            grid_resid_var[i] = self._wls(x, (self.pheno - one_way_mean)**2, weights)
+            x, weights, mask = self._get_design_matrix(t, bw)
+            data = (self.pheno[mask] - one_way_mean[mask])**2
+            grid_resid_var[i] = self._wls(x, data, weights)
 
         cut_time_grid = self.time_grid[
             (self.time_grid > np.quantile(self.time_grid, 0.25)) & 
