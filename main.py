@@ -297,6 +297,17 @@ common_parser.add_argument(
         "Leave-one-chromosome-out prediction file."
     ),
 )
+common_parser.add_argument(
+    "--partition",
+    help=(
+        "Genome partition file. "
+        "The file should be tab or space delimited without header, "
+        "with the first column being chromosome, "
+        "the second column being the start position, "
+        "and the third column being the end position."
+        "Each row contains only one LD block."
+    ),
+)
 
 # arguments for fpca.py
 fpca_parser.add_argument(
@@ -442,6 +453,13 @@ make_mt_parser.add_argument(
     "--lift-over",
     help="Target reference genome, either `GRCh37` or `GRCh38`."
 )
+make_mt_parser.add_argument(
+    "--geno-mt-list",
+    help=(
+        "A list of hail.MatrixTables to merge; each file must have the same subjects "
+        "in the same order."
+    )
+)
 
 
 def check_accepted_args(module, args, log):
@@ -483,6 +501,8 @@ def check_accepted_args(module, args, log):
             "ldrs",
             "covar",
             "cat_covar_list",
+            "keep_covar_list",
+            "remove_covar_list",
             "partition",
             "maf_min",
             "maf_max",
@@ -520,6 +540,8 @@ def check_accepted_args(module, args, log):
             "geno_mt",
             "covar",
             "cat_covar_list",
+            "keep_covar_list",
+            "remove_covar_list",
             "loco_preds",
             "spark_conf",
         },
@@ -603,6 +625,7 @@ def check_accepted_args(module, args, log):
             "grch37",
             "skip_qc",
             "lift_over",
+            "geno_mt_list"
         },
     }
 
@@ -722,6 +745,10 @@ def process_args(args, log):
             raise ValueError(
                 "--variant-type must be one of ('variant', 'snv', 'indel')"
             )
+            
+    if args.geno_mt_list is not None:
+        args.geno_mt_list = ds.parse_input(args.geno_mt_list)
+        log.info(f"{len(args.geno_mt_list)} MatrixTables in --geno-mt-list.")
     
 
 def main(args, log):

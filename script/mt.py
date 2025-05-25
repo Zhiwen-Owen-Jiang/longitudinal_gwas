@@ -15,8 +15,13 @@ TODO:
 
 
 def check_input(args, log):
-    if args.bfile is None and args.vcf is None and args.geno_mt is None:
-        raise ValueError("--bfile or --vcf or --geno-mt is required")
+    if (
+        args.bfile is None and 
+        args.vcf is None and 
+        args.geno_mt is None and 
+        args.geno_mt_list is None
+    ):
+        raise ValueError("--bfile or --vcf or --geno-mt or --geno-mt-list is required")
     if args.spark_conf is None:
         raise ValueError("--spark-conf is required")
 
@@ -279,59 +284,67 @@ def run(args, log):
     try:
         init_hail(args.spark_conf, args.grch37, args.out, log)
         
-        if args.extract_locus is not None:
-            args.extract_locus, unique_chrs = read_extract_locus(args.extract_locus, args.grch37, log)
+        if args.geno_mt_list is not None:
+            merged_mt = hl.read_matrix_table(args.geno_mt_list[0])
+            for file_path in args.geno_mt_list[1:]:
+                merged_mt = merged_mt.union_cols(hl.read_matrix_table(file_path))
+            log.info(f"Merging MatrixTables ...")
+            merged_mt.write(f"{args.out}.mt", overwrite=True)
+            log.info(f"Saved merged MatrixTable at {args.out}.mt")
         else:
-            unique_chrs = None
-        if args.exclude_locus is not None:
-            args.exclude_locus = read_exclude_locus(args.exclude_locus, args.grch37, log)
+            if args.extract_locus is not None:
+                args.extract_locus, unique_chrs = read_extract_locus(args.extract_locus, args.grch37, log)
+            else:
+                unique_chrs = None
+            if args.exclude_locus is not None:
+                args.exclude_locus = read_exclude_locus(args.exclude_locus, args.grch37, log)
 
-        # read genotype data
-        gprocessor = read_genotype_data(args, log)
+            # read genotype data
+            gprocessor = read_genotype_data(args, log)
 
-        # do preprocessing
-        gprocessor.extract_exclude_locus(args.extract_locus, args.exclude_locus, unique_chrs)
-        gprocessor.extract_exclude_snps(args.extract, args.exclude)
-        gprocessor.extract_chr_interval(args.chr_interval)
-        gprocessor.keep_remove_idvs(args.keep, args.remove)
-        if not args.skip_qc:
-            log.info(f"Processing genotype data ...")
-            gprocessor.do_processing(mode=args.qc_mode)
+            # do preprocessing
+            gprocessor.extract_exclude_locus(args.extract_locus, args.exclude_locus, unique_chrs)
+            gprocessor.extract_exclude_snps(args.extract, args.exclude)
+            gprocessor.extract_chr_interval(args.chr_interval)
+            gprocessor.keep_remove_idvs(args.keep, args.remove)
+            if not args.skip_qc:
+                log.info(f"Processing genotype data ...")
+                gprocessor.do_processing(mode=args.qc_mode)
 
-        # liftover
-        if args.lift_over:
-            log.info(f"Lifting over to {args.lift_over}")
-            gprocessor.lift_over(args.lift_over)
+            # liftover
+            if args.lift_over:
+                log.info(f"Lifting over to {args.lift_over}")
+                gprocessor.lift_over(args.lift_over)
 
-        # save
-        if args.save_sparse_genotype:
-            log.info("Constructing sparse genotype ...")
-            vset, locus = prepare_vset(gprocessor.snps_mt, args.variant_type)
-            log.info(
-                f"{vset.shape[1]} subjects and {vset.shape[0]} variants in the sparse genotype"
-            )
-            snps_mt_ids = gprocessor.subject_id()
-            save_npz(f"{args.out}_genotype.npz", vset)
-            locus.write(f"{args.out}_locus_info.ht", overwrite=True)
-            snps_mt_ids = pd.DataFrame({"FID": snps_mt_ids, "IID": snps_mt_ids})
-            snps_mt_ids.to_csv(f"{args.out}_id.txt", sep="\t", header=None, index=None)
-            log.info(
-                (
-                    f"Saved sparse genotype data at\n"
-                    f"{args.out}_genotype.npz\n"
-                    f"{args.out}_locus_info.ht\n"
-                    f"{args.out}_id.txt"
+            # save
+            if args.save_sparse_genotype:
+                log.info("Constructing sparse genotype ...")
+                vset, locus = prepare_vset(gprocessor.snps_mt, args.variant_type)
+                log.info(
+                    f"{vset.shape[1]} subjects and {vset.shape[0]} variants in the sparse genotype"
                 )
-            )
-        else:
-            gprocessor.snps_mt.write(f"{args.out}.mt", overwrite=True)
-            # post check
-            gprocessor = GProcessor.read_matrix_table(f"{args.out}.mt")
-            try:
-                gprocessor.check_valid()
-            except:
-                shutil.rmtree(f"{args.out}.mt")
-                raise
-            log.info(f"Saved genotype data at {args.out}.mt")
+                snps_mt_ids = gprocessor.subject_id()
+                save_npz(f"{args.out}_genotype.npz", vset)
+                locus.write(f"{args.out}_locus_info.ht", overwrite=True)
+                snps_mt_ids = pd.DataFrame({"FID": snps_mt_ids, "IID": snps_mt_ids})
+                snps_mt_ids.to_csv(f"{args.out}_id.txt", sep="\t", header=None, index=None)
+                log.info(
+                    (
+                        f"Saved sparse genotype data at\n"
+                        f"{args.out}_genotype.npz\n"
+                        f"{args.out}_locus_info.ht\n"
+                        f"{args.out}_id.txt"
+                    )
+                )
+            else:
+                gprocessor.snps_mt.write(f"{args.out}.mt", overwrite=True)
+                # post check
+                gprocessor = GProcessor.read_matrix_table(f"{args.out}.mt")
+                try:
+                    gprocessor.check_valid()
+                except:
+                    shutil.rmtree(f"{args.out}.mt")
+                    raise
+                log.info(f"Saved genotype data at {args.out}.mt")
     finally:
         clean(args.out)
