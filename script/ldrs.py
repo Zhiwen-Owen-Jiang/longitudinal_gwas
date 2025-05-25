@@ -112,6 +112,7 @@ def run(args, log):
     # read covariates
     log.info(f"Read covariates from {args.covar}")
     covar = ds.Covar(args.covar, args.cat_covar_list)
+    covar.keep_remove_covar(args.keep_covar_list, args.remove_covar_list)
 
     # keep common subjects
     common_idxs = ds.get_common_idxs(pheno.data.index, covar.data.index, args.keep)

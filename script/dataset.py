@@ -169,6 +169,15 @@ class Covar(Dataset):
         """
         super().__init__(dir)
         self.cat_covar_list = cat_covar_list
+        
+    def keep_remove_covar(self, keep_covar_list, remove_covar_list):
+        if keep_covar_list is not None:
+            self._check_validcatlist(keep_covar_list)
+            self.data = self.data[keep_covar_list]
+        if remove_covar_list is not None:
+            self._check_validcatlist(remove_covar_list)
+            for covar in remove_covar_list:
+                del self.data[covar]
 
     def cat_covar_intercept(self):
         """
@@ -614,26 +623,33 @@ def parse_input(arg):
     p0 = r"\{.*:.*\}"
     p1 = r"{(.*?)}"
     p2 = r"({.*})"
-    match = re.search(p0, arg)
-    if match:
-        file_range = re.search(p1, arg).group(1)
-        try:
-            start, end = [int(x) for x in file_range.split(":")]
-        except ValueError:
-            raise ValueError(
-                (
-                    "if multiple files are provided, "
-                    "they should be specified using `{}`, "
-                    "e.g. `prefix_{stard:end}_suffix`. "
-                    "Both start and end are included"
+    
+    parse = arg.split(",")
+    output = list()
+
+    for x in parse:
+        match = re.search(p0, x)
+        if match:
+            file_range = re.search(p1, x).group(1)
+            try:
+                start, end = [int(x) for x in file_range.split(":")]
+            except ValueError:
+                raise ValueError(
+                    (
+                        "if multiple files are provided, "
+                        "they should be specified using `{}`, "
+                        "e.g. `prefix_{stard:end}_suffix`. "
+                        "Both start and end are included."
+                    )
                 )
-            )
-        if start > end:
-            start, end = end, start
-        files = [re.sub(p2, str(i), arg) for i in range(start, end + 1)]
-        return files
-    else:
-        return arg.split(",")
+            if start > end:
+                start, end = end, start
+            files = [re.sub(p2, str(i), x) for i in range(start, end + 1)]
+            output.extend(files)
+        else:
+            output.append(x)
+
+    return output
 
 
 def keep_ldrs(n_ldrs, bases=None, ldr_cov=None, ldr_gwas=None, resid_ldrs=None):

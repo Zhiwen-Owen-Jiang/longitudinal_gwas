@@ -141,6 +141,20 @@ common_parser.add_argument(
     ),
 )
 common_parser.add_argument(
+    "--keep-covar-list",
+    help=(
+        "List of covariates to include in the analysis. "
+        "Multiple covariates are separated by comma."
+    )
+)
+common_parser.add_argument(
+    "--remove-covar-list",
+    help=(
+        "List of covariates to remove in the analysis. "
+        "Multiple covariates are separated by comma."
+    )
+)
+common_parser.add_argument(
     "--time-varying-covar-list",
     help=(
         "List of time varying covariates to include in the analysis. "
@@ -454,6 +468,8 @@ def check_accepted_args(module, args, log):
             "n_ldrs",
             "covar",
             "cat_covar_list",
+            "keep_covar_list",
+            "remove_covar_list",
             "keep",
             "remove",
         },
@@ -636,6 +652,14 @@ def process_args(args, log):
     else:
         args.threads = 1
     log.info(f"Using {args.threads} thread(s) in analysis.")
+
+    if args.keep_covar_list is not None:
+        args.keep_covar_list = ds.parse_input(args.keep_covar_list)
+        log.info(f"{len(args.keep_covar_list)} covariate(s) in --keep-covar-list.")
+
+    if args.remove_covar_list is not None:
+        args.remove_covar_list = ds.parse_input(args.remove_covar_list)
+        log.info(f"{len(args.remove_covar_list)} covariate(s) in --remove-covar-list.")
 
     if args.keep is not None:
         args.keep = split_files(args.keep)
