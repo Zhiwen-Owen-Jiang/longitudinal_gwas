@@ -497,9 +497,10 @@ class FPCAres:
             self.resid_var = file["resid_var"][()]
             self.time_grid = file["time_grid"][:]
             self.max_time = file["max_time"][()]
-            self.grid_mean = file["grid_mean"][()]
+            self.grid_mean = file["grid_mean"][:]
 
         self.n_bases = len(self.eg_values)
+        self.logger = logging.getLogger(__name__)
             
     def select_ldrs(self, n_ldrs):
         if n_ldrs is not None:
@@ -511,10 +512,15 @@ class FPCAres:
                 raise ValueError("the number of bases is less than --n-ldrs")
             
     def interpolate(self, new_time):
-        new_time = new_time / np.max(new_time)
-        interp_eg_vectors = np.zeros_like(self.eg_vectors)
+        new_time = new_time / self.max_time
+        print(np.max(new_time), np.min(new_time))
+        if np.max(new_time) > self.max_time or np.min(new_time) < self.time_grid[0]:
+            self.logger.info('WARNING: the new time to interpolate is out of bound.')
+        
+        interp_eg_vectors = np.zeros((len(new_time), self.n_bases), dtype=np.float32)
         for j in range(self.n_bases):
             interp_eg_vectors[:, j] = np.interp(new_time, self.time_grid, self.eg_vectors[:, j])
+
         return interp_eg_vectors
     
 
@@ -574,9 +580,9 @@ def run(args, log):
     with h5py.File(f"{args.out}_fpca.h5", "w") as file:
         file.create_dataset("eg_values", data=eg_values, dtype="float32")
         file.create_dataset("eg_vectors", data=eg_vectors, dtype="float32")
-        file.create_dataset("resid_var", data=resid_var, dtype="float32")
-        file.create_dataset("time_grid", data=pheno.time_grid, dtype="float32")
-        file.create_dataset("max_time", data=pheno.max_time, dtype="float32")
+        file.create_dataset("resid_var", data=resid_var)
+        file.create_dataset("time_grid", data=pheno.time_grid)
+        file.create_dataset("max_time", data=pheno.max_time)
         file.create_dataset("grid_mean", data=grid_mean, dtype="float32")
 
     log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")

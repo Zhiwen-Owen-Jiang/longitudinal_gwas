@@ -110,6 +110,8 @@ class Dataset:
                 common_idxs = get_common_idxs(self.data.index, keep_idx)
             else:
                 common_idxs = keep_idx
+            if isinstance(common_idxs, list):
+                common_idxs = pd.Index(common_idxs, name='IID')
             common_idxs = common_idxs.unique()
             self.data = self.data.loc[common_idxs]
         if remove_idx is not None:

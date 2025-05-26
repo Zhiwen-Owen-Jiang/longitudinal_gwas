@@ -11,14 +11,15 @@ from script import sumstats
 import script.dataset as ds
 from script.ldmatrix import LDmatrix
 from script.ldsc import LDSC
+from script.fpca import FPCAres
 
 
 def check_input(args, log):
     # required arguments
     if args.ldr_sumstats is None:
         raise ValueError("--ldr-sumstats is required")
-    if args.bases is None:
-        raise ValueError("--bases is required")
+    if args.fpca_res is None:
+        raise ValueError("--fpca-res is required")
     if args.ldr_cov is None:
         raise ValueError("--ldr-cov is required")
     if args.ld_inv is None:
@@ -903,8 +904,11 @@ def run(args, log):
     log.info(f"{ld.ldinfo.shape[0]} SNPs read from LD matrix (and its inverse).")
 
     # read bases and ldr_cov
-    bases = np.load(args.bases)
-    log.info(f"{bases.shape[1]} bases read from {args.bases}")
+    fpca_res = FPCAres(args.fpca_res)
+    log.info(f"{fpca_res.n_bases} bases read from {args.fpca_res}")
+    if args.time is not None:
+        bases = fpca_res.interpolate(args.time)
+        log.info(f"Interpolate to {args.time}.")
     ldr_cov = np.load(args.ldr_cov)
     log.info(f"Read variance-covariance matrix of LDRs from {args.ldr_cov}")
 

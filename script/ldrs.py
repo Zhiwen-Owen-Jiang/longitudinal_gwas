@@ -138,13 +138,13 @@ def run(args, log):
 
     # save the output
     ldr_df = pd.DataFrame(ldrs, index=covar.get_ids())
-    ldr_df.to_csv(f"{args.out}_ldr_top{fpca_res.n_bases}.txt", sep="\t")
-    np.save(f"{args.out}_ldr_cov_top{fpca_res.n_bases}.npy", ldr_cov)
+    ldr_df.to_csv(f"{args.out}_ldrs.txt", sep="\t")
+    np.save(f"{args.out}_ldr_cov.npy", ldr_cov)
 
-    log.info(f"Saved LDRs to {args.out}_ldr_top{fpca_res.n_bases}.txt")
+    log.info(f"Saved LDRs to {args.out}_ldrs.txt")
     log.info(
         (
             f"Saved the variance-covariance matrix of covariate-effect-removed LDRs "
-            f"to {args.out}_ldr_cov_top{fpca_res.n_bases}.npy"
+            f"to {args.out}_ldr_cov.npy"
         )
     )

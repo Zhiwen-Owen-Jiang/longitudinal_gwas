@@ -308,6 +308,15 @@ common_parser.add_argument(
         "Each row contains only one LD block."
     ),
 )
+common_parser.add_argument(
+    "--sig-thresh",
+    type=float,
+    help=(
+        "p-Value threshold for significance, "
+        "can be specified in a decimal 0.00000005 "
+        "or in scientific notation 5e-08."
+    ),
+)
 
 # arguments for fpca.py
 fpca_parser.add_argument(
