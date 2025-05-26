@@ -580,6 +580,7 @@ def run(args, log):
 
         log.info(f"Read covariates from {args.covar}")
         covar = ds.Covar(args.covar, args.cat_covar_list)
+        covar.keep_remove_covar(args.keep_covar_list, args.remove_covar_list)
 
         # keep common subjects
         common_ids = ds.get_common_idxs(ldrs.data.index, covar.data.index, args.keep)
@@ -632,15 +633,25 @@ def run(args, log):
         log.info(f"Doing level0 ridge regression ...")
         l0_pred_file = f"{args.out}_l0_pred_temp.h5"
         with h5py.File(l0_pred_file, "w") as file:
+            dataset_shape = (
+                ldrs.data.shape[1],  # Dimension for individuals
+                ldrs.data.shape[0],  # Dimension for variants
+                len(relatedness_remover.shrinkage_level0),
+                n_blocks,
+            )
+
+            chunk_shape = (
+                ldrs.data.shape[1],
+                ldrs.data.shape[0],
+                len(relatedness_remover.shrinkage_level0),
+                1  # Chunk along the 'n_blocks' dimension, one processing block at a time
+            )
+
             dset = file.create_dataset(
                 "level0_preds",
-                (
-                    ldrs.data.shape[1],
-                    ldrs.data.shape[0],
-                    len(relatedness_remover.shrinkage_level0),
-                    n_blocks,
-                ),
+                shape=dataset_shape,
                 dtype="float32",
+                chunks=chunk_shape,
             )
             for i, block in enumerate(tqdm(blocks, desc=f"{n_blocks} blocks")):
                 block = BlockMatrix.from_entry_expr(
