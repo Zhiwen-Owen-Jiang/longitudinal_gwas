@@ -6,6 +6,7 @@ from numba import njit
 from tqdm import tqdm
 from script import sumstats
 import script.dataset as ds
+from script.fpca import FPCAres
 
 
 @njit()
@@ -317,7 +318,7 @@ def write_header(snp_info, outpath):
 
     """
     output_header = snp_info.head(0).copy()
-    output_header.insert(0, "INDEX", None)
+    output_header.insert(0, "TIME", None)
     output_header["BETA"] = None
     output_header["SE"] = None
     output_header["Z"] = None
@@ -348,7 +349,7 @@ def _process_voxels_batch(
         sig_snps["SE"] = voxel_se[sig_idxs, i]
         sig_snps["Z"] = voxel_z[sig_idxs, i]
         sig_snps["P"] = chi2.sf(sig_snps["Z"] ** 2, 1)
-        sig_snps.insert(0, "INDEX", [voxel_idx + 1] * np.sum(sig_idxs))
+        sig_snps.insert(0, "TIME", [voxel_idx] * np.sum(sig_idxs))
         sig_snps_output = sig_snps.to_csv(
             sep="\t", header=False, na_rep="NA", index=None, float_format="%.5e"
         )
@@ -416,24 +417,10 @@ def check_input(args, log):
     # required arguments
     if args.ldr_sumstats is None:
         raise ValueError("--ldr-sumstats is required")
-    if args.bases is None:
-        raise ValueError("--bases is required")
+    if args.fpca_res is None:
+        raise ValueError("--fpca-res is required")
     if args.ldr_cov is None:
         raise ValueError("--ldr-cov is required")
-
-    # optional arguments
-    if (
-        args.chr_interval is None
-        and args.voxels is None
-        and args.sig_thresh is None
-        and args.extract is None
-    ):
-        log.info(
-            (
-                "WARNING: generating all voxelwise summary statistics will require large disk space. "
-                "Specify a p-value threshold by --sig-thresh to screen out insignificant results."
-            )
-        )
 
     # process some arguments
     if args.chr_interval is not None:
@@ -464,10 +451,16 @@ def run(args, log):
     target_chr, start_pos, end_pos = check_input(args, log)
 
     # reading data
+    fpca_res = FPCAres(args.fpca_res)
+    log.info(f"{fpca_res.n_bases} bases read from {args.fpca_res}")
+    if args.time is not None:
+        bases = fpca_res.interpolate(args.time)
+        log.info(f"Interpolate to {args.time}.")
+        time = args.time
+    else:
+        time = fpca_res.time_grid
     ldr_cov = np.load(args.ldr_cov)
     log.info(f"Read variance-covariance matrix of LDRs from {args.ldr_cov}")
-    bases = np.load(args.bases)
-    log.info(f"{bases.shape[1]} bases read from {args.bases}")
 
     try:
         ldr_gwas = sumstats.read_sumstats(args.ldr_sumstats)
@@ -493,13 +486,6 @@ def run(args, log):
 
         # getting the outpath and SNP list
         outpath = args.out
-        if args.voxels is not None:
-            if np.max(args.voxels) + 1 <= bases.shape[0] and np.min(args.voxels) >= 0:
-                log.info(f"{len(args.voxels)} voxel(s) included.")
-            else:
-                raise ValueError("--voxels index (one-based) out of range")
-        else:
-            args.voxels = np.arange(bases.shape[0])
 
         if target_chr:
             snp_idxs = (
@@ -540,14 +526,14 @@ def run(args, log):
 
         # doing analysis
         log.info(
-            f"Recovering voxel-level GWAS results for {np.sum(snp_idxs)} SNP(s) ..."
+            f"Recovering longitudinal GWAS results for {np.sum(snp_idxs)} SNP(s) ..."
         )
         write_header(snp_info, outpath)
         vgwas = VGWAS(bases, ldr_cov, ldr_gwas, snp_idxs, ldr_n, args.threads)
 
         for voxel_idxs in tqdm(
-            voxel_reader(np.sum(snp_idxs), args.voxels),
-            desc=f"Doing GWAS for {len(args.voxels)} voxel(s) in batch",
+            voxel_reader(np.sum(snp_idxs), np.arange(bases.shape[0])),
+            desc=f"Doing GWAS for {len(bases)} time point(s) in batch",
         ):
             voxel_beta = vgwas.recover_beta(voxel_idxs, args.threads)
             # voxel_beta = vgwas.recover_beta_numba(voxel_idxs, args.threads)
@@ -560,7 +546,7 @@ def run(args, log):
             all_sig_idxs_voxel = all_sig_idxs.any(axis=0)
 
             process_voxels(
-                voxel_idxs,
+                time[voxel_idxs],
                 all_sig_idxs,
                 snp_info,
                 voxel_beta,
