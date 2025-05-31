@@ -156,8 +156,7 @@ class LongiPheno(Dataset):
         self.sub_n_obs = self.data.index.value_counts(sort=False).values
         self.to_single_index()
         self.sub_time = self.data.groupby("IID")["time"].apply(list).to_dict()
-        self.grid_size = (self.unique_time[-1] - self.unique_time[0]) / 50
-        self.time_grid = np.arange(self.unique_time[0], self.unique_time[-1] + self.grid_size, self.grid_size)
+        self.time_grid, self.grid_size = np.linspace(self.unique_time[0], self.unique_time[-1], 50, retstep=True)
 
 
 class Covar(Dataset):
