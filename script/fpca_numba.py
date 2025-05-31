@@ -3,7 +3,6 @@ import logging
 import numpy as np
 from numba import njit, prange
 from abc import ABC, abstractmethod
-from scipy.linalg import cho_solve, cho_factor
 import script.dataset as ds
 
 
@@ -166,8 +165,7 @@ class LocalLinear(ABC):
             gau_k = np.prod(gau_k, axis=1).reshape(-1, 1)
         return gau_k.astype(np.float32)
     
-    @staticmethod
-    def _wls(x, y, weights):
+    def _wls(self, x, y, weights):
         """
         Weighted least squares
         
@@ -176,10 +174,14 @@ class LocalLinear(ABC):
             weights = weights.reshape(-1, 1)
         xw = x * weights
         xtx = np.dot(xw.T, x)
-        xtx += np.eye(xtx.shape[0]) * 1e-8
         xty = np.dot(xw.T, y)
-        c, lower = cho_factor(xtx)
-        beta = cho_solve((c, lower), xty).astype(np.float32)
+        n_features = xtx.shape[0]
+        A = xtx.copy()
+        for i in range(n_features):
+            A[i, i] += 1e-8
+        L = np.linalg.cholesky(A)
+        z = np.linalg.solve(L, xty)
+        beta = np.linalg.solve(L.T, z).astype(np.float32)
         return beta[0]
     
     def _get_bw_candidates(self, time_window):
@@ -231,7 +233,7 @@ class Mean(LocalLinear):
         time_window = self.unique_time[-1] - self.unique_time[0]
         bw_cand = self._get_bw_candidates(time_window)
         gcv_score = np.zeros(6, dtype=np.float32)
-        const = time_window * self.GAUSSIAN_CONST / len(self.pheno)
+        const = (time_window * self.GAUSSIAN_CONST / len(self.pheno)).astype(np.float32)
         self.logger.info(f"Selecting bandwidth for mean function from {bw_cand}.")
 
         for i, bw in enumerate(bw_cand):
@@ -305,25 +307,8 @@ class Covariance(LocalLinear):
             start1 = end1
             start2 = end2
 
-        # self.unique_time_comb = np.zeros((self.n_time ** 2 - self.n_time, 2), dtype=np.float32)
-        # self.mean_pheno = np.zeros(self.n_time ** 2 - self.n_time, dtype=np.float32)
-        # self.time_comb_count = np.zeros((self.n_time ** 2 - self.n_time, 1), dtype=np.int32)
-        # k = 0
-        # for i in range(self.n_time):
-        #     for j in range(self.n_time):
-        #         if i != j:
-        #             t1 = self.unique_time[i]
-        #             t2 = self.unique_time[j]
-        #             self.unique_time_comb[k] = np.array([t1, t2])
-        #             time_comb_idx = (self.two_way_time == self.unique_time_comb[k]).all(axis=1)
-        #             self.time_comb_count[k] = np.sum(time_comb_idx)
-        #             self.mean_pheno[k] = np.mean(self.two_way_pheno[time_comb_idx], axis=0)
-        #             k += 1
-
     def _get_design_matrix(self, t1, t2, bw):
-        # time_diff = self.unique_time_comb - np.array([t1, t2])
         time_diff = self.two_way_time - np.array([t1, t2])
-        # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
         normed_time_diff = time_diff / bw
         mask = np.sum(np.abs(normed_time_diff), axis=1) < 6
         weights = self._gau_kernel(normed_time_diff[mask])
@@ -336,7 +321,6 @@ class Covariance(LocalLinear):
         
         """
         time_diff = time - t
-        # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
         weights = self._gau_kernel(time_diff / bw)
         time_diff[:, 1] = time_diff[:, 1] ** 2
         x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
@@ -349,7 +333,6 @@ class Covariance(LocalLinear):
             for t1 in range(self.n_grids):
                 for t2 in range(t1, self.n_grids):
                     x, weights, mask = self._get_design_matrix(self.time_grid[t1], self.time_grid[t2], bw)
-                    # grid_cov_function[t1, t2] = self._wls(x, self.mean_pheno, weights)
                     grid_cov_function[t1, t2] = self._wls(x, self.two_way_pheno[mask], weights)
             
             iu_rows, iu_cols = np.triu_indices(self.n_grids, k=1)
@@ -365,18 +348,15 @@ class Covariance(LocalLinear):
             cut_time_grid = np.tile(cut_time_grid.reshape(-1, 1), 2)
             n_cut_time_grid = cut_time_grid.shape[0]
             rotation_matrix = np.array([[1, 1], [-1, 1]]).T * (np.sqrt(2) / 2)
-            # rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
             rotated_two_way_time = np.dot(self.two_way_time, rotation_matrix)
             rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
             cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
             for t in range(n_cut_time_grid):
                 x, weights = self._get_design_matrix2(
-                    # rotated_time_comb, 
                     rotated_two_way_time,
                     rotated_cut_time_grid[t],
                     bw,
                 )
-                # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
                 cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
 
             return cut_time_grid_diag

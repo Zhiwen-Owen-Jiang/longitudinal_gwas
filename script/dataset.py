@@ -146,10 +146,10 @@ class LongiPheno(Dataset):
             raise ValueError('negative time is not allowed')
         
     def generate_time_features(self):
-        self.pheno = np.array(self.data["pheno"])
+        self.pheno = np.array(self.data["pheno"], dtype=np.float32)
         self.max_time = self.data["time"].max()
         self.data["time"] = self.data["time"] / self.max_time
-        self.time = np.array(self.data["time"])
+        self.time = np.array(self.data["time"], dtype=np.float32)
         self.unique_time = np.unique(self.time)
         self.unique_time_idx = {x: i for i, x in enumerate(self.unique_time)}
         self.time_idx = np.array([self.unique_time_idx[x] for x in self.time])
