@@ -50,7 +50,7 @@ def pace(pheno, fpca_res):
     """
     sub_time = pheno.sub_time
     unique_time = pheno.unique_time
-    unique_time_idx = pheno.unique_time_idx
+    time_idx = pheno.time_idx
     n_sub = pheno.n_sub
     pheno = pheno.pheno
 
@@ -59,7 +59,7 @@ def pace(pheno, fpca_res):
     eg_values = fpca_res.eg_values
     eg_vectors = fpca_res.eg_vectors
     grid_mean = fpca_res.grid_mean
-    mean = np.interp(unique_time, time_grid, grid_mean)
+    mean = np.interp(unique_time, time_grid, grid_mean) # different from r package
 
     n_time = len(unique_time)
     n_ldrs = eg_vectors.shape[1]
@@ -67,6 +67,7 @@ def pace(pheno, fpca_res):
     interp_eg_vectors = np.zeros((n_time, n_ldrs), dtype=np.float32)
     time_ldrs = np.zeros((n_sub, n_ldrs), dtype=np.float32)
     for j in range(n_ldrs):
+        # different from r package
         interp_eg_vectors[:, j] = np.interp(unique_time, time_grid, eg_vectors[:, j])
 
     fitted_cov = np.dot(interp_eg_vectors * eg_values, interp_eg_vectors.T)
@@ -75,11 +76,11 @@ def pace(pheno, fpca_res):
     start, end = 0, 0
     for sub_idx, (_, time) in enumerate(sub_time.items()):
         end += len(time)
-        time_idx = np.array([unique_time_idx[t] for t in time])
+        time_idx_i = time_idx[start: end]
         y_i = pheno[start: end] # (n_time_i, )
-        mean_i = mean[time_idx] # (n_time_i, )
-        Sigma_i_inv = inv(fitted_cov[time_idx][:, time_idx]) # (n_time_i, n_time_i)
-        eg_vector = interp_eg_vectors[time_idx] # (n_time_i, n_opt)
+        mean_i = mean[time_idx_i] # (n_time_i, )
+        Sigma_i_inv = inv(fitted_cov[time_idx_i][:, time_idx_i]) # (n_time_i, n_time_i)
+        eg_vector = interp_eg_vectors[time_idx_i] # (n_time_i, n_opt)
         time_ldrs[sub_idx] = np.dot(np.dot(eg_vector.T, Sigma_i_inv), y_i - mean_i)
         start = end
 
@@ -131,6 +132,7 @@ def run(args, log):
     log.info(f"Constructed {fpca_res.n_bases} LDRs.")
 
     # var-cov matrix of projected LDRs
+    # ldr_cov = projection_ldr(ldrs, np.array(covar.data)[:, [0]])
     ldr_cov = projection_ldr(ldrs, np.array(covar.data))
     log.info(
         f"Removed covariate effects from LDRs and computed variance-covariance matrix.\n"

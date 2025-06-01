@@ -146,17 +146,17 @@ class LongiPheno(Dataset):
             raise ValueError('negative time is not allowed')
         
     def generate_time_features(self):
-        self.pheno = np.array(self.data["pheno"], dtype=np.float32)
+        self.pheno = np.array(self.data["pheno"])
         self.max_time = self.data["time"].max()
         self.data["time"] = self.data["time"] / self.max_time
-        self.time = np.array(self.data["time"], dtype=np.float32)
+        self.time = np.array(self.data["time"])
         self.unique_time = np.unique(self.time)
         self.unique_time_idx = {x: i for i, x in enumerate(self.unique_time)}
         self.time_idx = np.array([self.unique_time_idx[x] for x in self.time])
         self.sub_n_obs = self.data.index.value_counts(sort=False).values
         self.to_single_index()
         self.sub_time = self.data.groupby("IID")["time"].apply(list).to_dict()
-        self.time_grid, self.grid_size = np.linspace(self.unique_time[0], self.unique_time[-1], 50, retstep=True)
+        self.time_grid, self.grid_size = np.linspace(self.unique_time[0], self.unique_time[-1], 51, retstep=True)
 
 
 class Covar(Dataset):

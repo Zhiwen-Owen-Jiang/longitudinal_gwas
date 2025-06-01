@@ -337,10 +337,13 @@ class Covariance(LocalLinear):
         """
         time_diff = time - t
         # weights = self._gau_kernel(time_diff / bw) * self.time_comb_count
-        weights = self._gau_kernel(time_diff / bw)
+        normed_time_diff = time_diff / bw
+        mask = np.sum(np.abs(normed_time_diff), axis=1) < 6
+        time_diff = time_diff[mask]
+        weights = self._gau_kernel(normed_time_diff[mask])
         time_diff[:, 1] = time_diff[:, 1] ** 2
         x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
-        return x, weights
+        return x, weights, mask
     
     def estimate(self, bw, grid=True):
         if grid:
@@ -370,14 +373,14 @@ class Covariance(LocalLinear):
             rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
             cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
             for t in range(n_cut_time_grid):
-                x, weights = self._get_design_matrix2(
+                x, weights, mask = self._get_design_matrix2(
                     # rotated_time_comb, 
                     rotated_two_way_time,
                     rotated_cut_time_grid[t],
                     bw,
                 )
                 # cut_time_grid_diag[t] = self._wls(x, self.mean_pheno, weights)
-                cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno, weights)
+                cut_time_grid_diag[t] = self._wls(x, self.two_way_pheno[mask], weights)
 
             return cut_time_grid_diag
     
@@ -458,7 +461,11 @@ class ResidualVariance(LocalLinear):
         ]
         resid_var = traz(cut_time_grid, (grid_resid_var - diag)) / (0.5 * time_window) 
 
-        return resid_var
+        if resid_var < 0:
+            resid_var = 1e-6
+            self.logger.info("WARNING: the residual variance is negative, set to 1e-6.")
+
+        return resid_var, grid_resid_var
     
 
 def eigen(grid_mean, grid_cov, grid_size, time_grid):
@@ -510,6 +517,10 @@ class FPCAres:
 
         self.n_bases = len(self.eg_values)
         self.logger = logging.getLogger(__name__)
+
+        if self.resid_var < 0:
+            self.resid_var = 1e-6
+            self.logger.info("WARNING: the residual variance is negative, set to 1e-6.")
             
     def select_ldrs(self, n_ldrs):
         if n_ldrs is not None:
@@ -577,7 +588,7 @@ def run(args, log):
     cut_time_grid_diag = cov_estimator.estimate(cov_bw, grid=False)
 
     resid_var_estimator = ResidualVariance(pheno)
-    resid_var = resid_var_estimator.estimate(
+    resid_var, grid_resid_var = resid_var_estimator.estimate(
         mean, cut_time_grid_diag, cov_bw
     )
 
@@ -592,5 +603,8 @@ def run(args, log):
         file.create_dataset("time_grid", data=pheno.time_grid)
         file.create_dataset("max_time", data=pheno.max_time)
         file.create_dataset("grid_mean", data=grid_mean, dtype="float32")
+        file.create_dataset("grid_cov", data=grid_cov, dtype="float32")
+        file.create_dataset("grid_resid_var", data=grid_resid_var, dtype="float32")
+        file.create_dataset("cut_time_grid_diag", data=cut_time_grid_diag, dtype="int32")
 
     log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")
