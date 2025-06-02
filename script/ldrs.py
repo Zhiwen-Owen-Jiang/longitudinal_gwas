@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import script.dataset as ds
 from script.utils import inv
-from script.fpca import FPCAres
+from script.fpca import FPCAres, interp2lin_numba
 
 
 def projection_ldr(ldr, covar):
@@ -59,6 +59,9 @@ def pace(pheno, fpca_res):
     eg_values = fpca_res.eg_values
     eg_vectors = fpca_res.eg_vectors
     grid_mean = fpca_res.grid_mean
+
+    ## in the R package, the mean is interpolated from observed mean,
+    ## but here I use the mean from the grid
     mean = np.interp(unique_time, time_grid, grid_mean) # different from r package
 
     n_time = len(unique_time)
@@ -67,12 +70,23 @@ def pace(pheno, fpca_res):
     interp_eg_vectors = np.zeros((n_time, n_ldrs), dtype=np.float32)
     time_ldrs = np.zeros((n_sub, n_ldrs), dtype=np.float32)
     for j in range(n_ldrs):
-        # different from r package
-        interp_eg_vectors[:, j] = np.interp(unique_time, time_grid, eg_vectors[:, j])
+        interp_eg_vectors[:, j] = np.interp(unique_time, time_grid, eg_vectors[:, j]) # needed
 
-    fitted_cov = np.dot(interp_eg_vectors * eg_values, interp_eg_vectors.T)
-    fitted_cov += np.diag([resid_var] * n_time)
+    # fitted_cov = np.dot(interp_eg_vectors * eg_values, interp_eg_vectors.T)
+    # fitted_cov += np.diag([resid_var] * n_time)
     interp_eg_vectors = interp_eg_vectors * eg_values
+    
+    ## in the R package, the fitted_cov is computed by all positive eigenvalues,
+    ## but here I use top 99% eigenvalues
+    fitted_cov = np.dot(eg_vectors * eg_values, eg_vectors.T)
+    meshed_grids = np.meshgrid(unique_time, unique_time)
+    meshed_grids = np.stack(meshed_grids, axis=-1).reshape(-1, 2)
+    fitted_cov = interp2lin_numba(
+        time_grid, time_grid, fitted_cov.reshape(-1), meshed_grids[:, 0], meshed_grids[:, 1]
+    ).reshape(n_time, n_time)
+    fitted_cov = (fitted_cov + fitted_cov.T) / 2
+    fitted_cov += np.diag([resid_var] * n_time)
+
     start, end = 0, 0
     for sub_idx, (_, time) in enumerate(sub_time.items()):
         end += len(time)

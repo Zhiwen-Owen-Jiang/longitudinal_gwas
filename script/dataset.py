@@ -141,6 +141,9 @@ class LongiPheno(Dataset):
         """
         super().__init__(dir, all_num_cols=True, allow_dup=True)
         self.data.columns = ["time", "pheno"]
+        self.data = self.data.reset_index()
+        self.data = self.data[~self.data[['IID', 'time']].duplicated()]
+        self.data = self.data.set_index(["FID", "IID"])
         
         if (self.data["time"] < 0).any():
             raise ValueError('negative time is not allowed')

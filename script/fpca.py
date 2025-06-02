@@ -462,8 +462,8 @@ class ResidualVariance(LocalLinear):
         resid_var = traz(cut_time_grid, (grid_resid_var - diag)) / (0.5 * time_window) 
 
         if resid_var < 0:
-            resid_var = 1e-6
-            self.logger.info("WARNING: the residual variance is negative, set to 1e-6.")
+            resid_var = 1e-2
+            self.logger.info("WARNING: the residual variance is negative, set to 1e-2.")
 
         return resid_var, grid_resid_var
     
@@ -519,8 +519,8 @@ class FPCAres:
         self.logger = logging.getLogger(__name__)
 
         if self.resid_var < 0:
-            self.resid_var = 1e-6
-            self.logger.info("WARNING: the residual variance is negative, set to 1e-6.")
+            self.resid_var = 1e-2
+            self.logger.info("WARNING: the residual variance is negative, set to 1e-2.")
             
     def select_ldrs(self, n_ldrs):
         if n_ldrs is not None:
