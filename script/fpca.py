@@ -51,17 +51,17 @@ def interp2lin_numba(xin: np.ndarray, yin: np.ndarray, zin: np.ndarray,
     if nXGrid == 0 or nYGrid == 0 or nUnknownPoints == 0:
         return result 
         
-    xmin_grid, xmax_grid = xin[0], xin[-1]
-    ymin_grid, ymax_grid = yin[0], yin[-1]
+    # xmin_grid, xmax_grid = xin[0], xin[-1]
+    # ymin_grid, ymax_grid = yin[0], yin[-1]
     
     epsilon = 1e-9 
 
     for i in prange(nUnknownPoints):
         xo, yo = xou[i], you[i]
         
-        if not (xmin_grid <= xo <= xmax_grid and ymin_grid <= yo <= ymax_grid):
-            result[i] = np.nan
-            continue
+        # if not (xmin_grid <= xo <= xmax_grid and ymin_grid <= yo <= ymax_grid):
+        #     result[i] = np.nan
+        #     continue
             
         x_idx_upper = np.searchsorted(xin, xo, side='left')
         y_idx_upper = np.searchsorted(yin, yo, side='left')
@@ -164,7 +164,7 @@ class LocalLinear(ABC):
         gau_k = self.GAUSSIAN_CONST * np.exp(-0.5 * x**2)
         if len(gau_k.shape) == 2:
             gau_k = np.prod(gau_k, axis=1).reshape(-1, 1)
-        return gau_k.astype(np.float32)
+        return gau_k
     
     @staticmethod
     def _wls(x, y, weights):
@@ -179,7 +179,7 @@ class LocalLinear(ABC):
         xtx += np.eye(xtx.shape[0]) * 1e-8
         xty = np.dot(xw.T, y)
         c, lower = cho_factor(xtx)
-        beta = cho_solve((c, lower), xty).astype(np.float32)
+        beta = cho_solve((c, lower), xty)
         return beta[0]
     
     def _get_bw_candidates(self, time_window):
@@ -212,7 +212,7 @@ class Mean(LocalLinear):
     
     def estimate(self, bw, grid=True):
         if grid:
-            grid_mean_function = np.zeros(self.n_grids, dtype=np.float32)
+            grid_mean_function = np.zeros(self.n_grids)
             for i, t in enumerate(self.time_grid):
                 x, weights, mask = self._get_design_matrix(t, bw)
                 grid_mean_function[i] = self._wls(x, self.pheno[mask], weights)
@@ -220,7 +220,7 @@ class Mean(LocalLinear):
             return grid_mean_function
 
         else:
-            mean_function = np.zeros(self.n_time, dtype=np.float32)
+            mean_function = np.zeros(self.n_time)
             for i, t in enumerate(self.unique_time):
                 x, weights, mask = self._get_design_matrix(t, bw)
                 mean_function[i] = self._wls(x, self.pheno[mask], weights)
@@ -230,7 +230,7 @@ class Mean(LocalLinear):
     def gcv(self):
         time_window = self.unique_time[-1] - self.unique_time[0]
         bw_cand = self._get_bw_candidates(time_window)
-        gcv_score = np.zeros(6, dtype=np.float32)
+        gcv_score = np.zeros(6)
         const = time_window * self.GAUSSIAN_CONST / len(self.pheno)
         self.logger.info(f"Selecting bandwidth for mean function from {bw_cand}.")
 
@@ -275,11 +275,9 @@ class Covariance(LocalLinear):
         super().__init__(pheno)
         self.two_way_pheno = np.zeros(
             np.sum(self.n_obs ** 2 - self.n_obs), 
-            dtype=np.float32
         )
         self.two_way_time = np.zeros(
             (np.sum(self.n_obs ** 2 - self.n_obs), 2), 
-            dtype=np.float32
         )
 
         start1, end1 = 0, 0
@@ -327,7 +325,7 @@ class Covariance(LocalLinear):
         normed_time_diff = time_diff / bw
         mask = np.sum(np.abs(normed_time_diff), axis=1) < 6
         weights = self._gau_kernel(normed_time_diff[mask])
-        x = np.hstack([np.ones_like(weights, dtype=np.float32), time_diff[mask]])
+        x = np.hstack([np.ones_like(weights), time_diff[mask]])
         return x, weights, mask
     
     def _get_design_matrix2(self, time, t, bw):
@@ -342,12 +340,12 @@ class Covariance(LocalLinear):
         time_diff = time_diff[mask]
         weights = self._gau_kernel(normed_time_diff[mask])
         time_diff[:, 1] = time_diff[:, 1] ** 2
-        x = np.hstack([np.ones(time_diff.shape[0], dtype=np.float32).reshape(-1, 1), time_diff])
+        x = np.hstack([np.ones(time_diff.shape[0]).reshape(-1, 1), time_diff])
         return x, weights, mask
     
     def estimate(self, bw, grid=True):
         if grid:
-            grid_cov_function = np.zeros((self.n_grids, self.n_grids), dtype=np.float32)
+            grid_cov_function = np.zeros((self.n_grids, self.n_grids))
 
             for t1 in range(self.n_grids):
                 for t2 in range(t1, self.n_grids):
@@ -371,7 +369,7 @@ class Covariance(LocalLinear):
             # rotated_time_comb = np.dot(self.unique_time_comb, rotation_matrix)
             rotated_two_way_time = np.dot(self.two_way_time, rotation_matrix)
             rotated_cut_time_grid = np.dot(cut_time_grid, rotation_matrix)
-            cut_time_grid_diag = np.zeros(n_cut_time_grid, dtype=np.float32)
+            cut_time_grid_diag = np.zeros(n_cut_time_grid)
             for t in range(n_cut_time_grid):
                 x, weights, mask = self._get_design_matrix2(
                     # rotated_time_comb, 
@@ -387,7 +385,7 @@ class Covariance(LocalLinear):
     def gcv(self):
         time_window = self.unique_time[-1] - self.unique_time[0]
         bw_cand = self._get_bw_candidates(time_window)
-        gcv_score = np.zeros(6, dtype=np.float32)
+        gcv_score = np.zeros(6)
         const = 3 * (time_window * self.GAUSSIAN_CONST) ** 2 / len(self.two_way_pheno)
         self.logger.info(f"Selecting bandwidth for covariance function from {bw_cand}.")
 
@@ -444,7 +442,7 @@ class ResidualVariance(LocalLinear):
     def estimate(self, mean, diag, bw):
         time_window = self.unique_time[-1] - self.unique_time[0]
         one_way_mean = mean[self.time_idx]
-        grid_resid_var = np.zeros(self.n_grids, dtype=np.float32)
+        grid_resid_var = np.zeros(self.n_grids)
 
         for i, t in enumerate(self.time_grid):
             x, weights, mask = self._get_design_matrix(t, bw)
@@ -468,7 +466,7 @@ class ResidualVariance(LocalLinear):
         return resid_var, grid_resid_var
     
 
-def eigen(grid_mean, grid_cov, grid_size, time_grid):
+def eigen(grid_mean, grid_cov, grid_size, time_grid, log):
     """
     Eigen decomposition
 
@@ -479,6 +477,7 @@ def eigen(grid_mean, grid_cov, grid_size, time_grid):
     grid_cov (n_ldrs, n_grids, n_grids): a np.array of cov estimate
     grid_size:
     time_grid:
+    log:
 
     Returns:
     ---------
@@ -491,6 +490,25 @@ def eigen(grid_mean, grid_cov, grid_size, time_grid):
     eg_vectors = np.flip(eg_vectors, axis=1) # (n_time, n_time)
     eg_vectors = eg_vectors[:, eg_values > 0]
     eg_values = eg_values[eg_values > 0]
+
+    prop_var = np.cumsum(eg_values) / np.sum(eg_values)
+    prop_ldrs = {}
+    for prop in [0.9, 0.95, 0.98, 0.99]:
+        prop_ldrs[prop] = np.sum(prop_var <= prop) + 1
+
+    max_key_len = max(len(str(key)) for key in prop_ldrs.keys())
+    max_val_len = max(len(str(value)) for value in prop_ldrs.values())
+    max_len = max([max_key_len, max_val_len])
+    keys_str = "  ".join(f"{str(key):<{max_len}}" for key in prop_ldrs.keys())
+    values_str = "  ".join(
+        f"{str(value):<{max_len}}" for value in prop_ldrs.values()
+    )
+
+    log.info(
+        "The number of LDRs for preserving varying proportions of variance:"
+    )
+    log.info(keys_str)
+    log.info(values_str)
     
     fve = np.cumsum(eg_values) / np.sum(eg_values)
     n_opt = np.argmax(fve > 0.99) + 1
@@ -536,7 +554,7 @@ class FPCAres:
         if np.max(new_time) > self.max_time or np.min(new_time) < self.time_grid[0]:
             self.logger.info('WARNING: the new time to interpolate is out of bound.')
         
-        interp_eg_vectors = np.zeros((len(new_time), self.n_bases), dtype=np.float32)
+        interp_eg_vectors = np.zeros((len(new_time), self.n_bases))
         for j in range(self.n_bases):
             interp_eg_vectors[:, j] = np.interp(new_time, self.time_grid, self.eg_vectors[:, j])
 
@@ -593,18 +611,18 @@ def run(args, log):
     )
 
     # eigen
-    eg_values, eg_vectors = eigen(grid_mean, grid_cov, pheno.grid_size, pheno.time_grid)
+    eg_values, eg_vectors = eigen(grid_mean, grid_cov, pheno.grid_size, pheno.time_grid, log)
 
     # save
     with h5py.File(f"{args.out}_fpca.h5", "w") as file:
-        file.create_dataset("eg_values", data=eg_values, dtype="float32")
-        file.create_dataset("eg_vectors", data=eg_vectors, dtype="float32")
+        file.create_dataset("eg_values", data=eg_values)
+        file.create_dataset("eg_vectors", data=eg_vectors)
         file.create_dataset("resid_var", data=resid_var)
         file.create_dataset("time_grid", data=pheno.time_grid)
         file.create_dataset("max_time", data=pheno.max_time)
-        file.create_dataset("grid_mean", data=grid_mean, dtype="float32")
-        file.create_dataset("grid_cov", data=grid_cov, dtype="float32")
-        file.create_dataset("grid_resid_var", data=grid_resid_var, dtype="float32")
-        file.create_dataset("cut_time_grid_diag", data=cut_time_grid_diag, dtype="int32")
+        file.create_dataset("grid_mean", data=grid_mean)
+        file.create_dataset("grid_cov", data=grid_cov)
+        file.create_dataset("grid_resid_var", data=grid_resid_var)
+        file.create_dataset("cut_time_grid_diag", data=cut_time_grid_diag)
 
     log.info(f"\nSaved FPCA results to {args.out}_fpca.h5")
